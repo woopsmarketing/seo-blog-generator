@@ -1,0 +1,29 @@
+{
+  "env": {
+    "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "8000",
+    "DISABLE_NON_ESSENTIAL_MODEL_CALLS": "1",
+    "DISABLE_COST_WARNINGS": "1"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(where claude)",
+      "Bash(dir /a .claude)",
+      "Bash(find:*)",
+      "Bash(python:*)",
+      "mcp__sequential-thinking__sequentialthinking",
+      "WebFetch(domain:platform.openai.com)",
+      "WebSearch",
+      "Bash(git config:*)",
+      "Bash(git add:*)"
+    ]
+  },
+  "enabledMcpjsonServers": [
+    "playwright",
+    "filesystem",
+    "memory",
+    "fetch",
+    "context7",
+    "sequential-thinking"
+  ],
+  "disableAllHooks": true
+}

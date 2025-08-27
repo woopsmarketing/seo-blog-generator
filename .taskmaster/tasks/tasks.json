@@ -1,0 +1,695 @@
+{
+  "master": {
+    "tasks": [
+      {
+        "id": 11,
+        "title": "LangChain 환경 설정 및 API 구성",
+        "description": "OpenAI/Anthropic API 통합과 함께 기본 LangChain 환경을 구성하고, 구조화된 출력을 위한 Pydantic 모델을 설정하며, SEO 블로그 생성 파이프라인의 기초를 구축합니다",
+        "details": "1. 필수 패키지 설치: pip install langchain==0.2.* openai anthropic pydantic python-dotenv\n2. API 키로 .env 파일 생성:\n   OPENAI_API_KEY=your_key\n   ANTHROPIC_API_KEY=your_key\n3. 기본 구성 설정:\n```python\nfrom langchain.chat_models import ChatOpenAI, ChatAnthropic\nfrom langchain.output_parsers import PydanticOutputParser\nfrom pydantic import BaseModel, Field\nfrom typing import List, Dict, Optional\nimport os\nfrom dotenv import load_dotenv\n\nload_dotenv()\n\nclass BlogSection(BaseModel):\n    h2: str = Field(description=\"H2 제목 텍스트\")\n    h3: List[str] = Field(default_factory=list, description=\"H3 부제목들\")\n    h4_map: Dict[str, List[str]] = Field(default_factory=dict)\n\nclass BlogOutline(BaseModel):\n    sections: List[BlogSection] = Field(description=\"블로그 섹션들\")\n\nclass BlogState(BaseModel):\n    keyword: str\n    title: Optional[str] = None\n    outline: Optional[BlogOutline] = None\n    sections: List[Dict] = Field(default_factory=list)\n    metadata: Dict = Field(default_factory=dict)\n```\n4. 모델 전환을 위한 LLM 팩토리 함수 생성\n5. 로깅 구성 설정",
+        "testStrategy": "1. API 키가 올바르게 로드되는지 확인\n2. OpenAI와 Anthropic 모두로 LLM 초기화 테스트\n3. Pydantic 모델 직렬화/역직렬화 검증\n4. 간단한 프롬프트로 기본 LLM 호출 테스트\n5. 누락된 API 키에 대한 에러 처리 확인",
+        "priority": "high",
+        "dependencies": [],
+        "status": "done",
+        "subtasks": []
+      },
+      {
+        "id": 12,
+        "title": "SEO 제목 생성 모듈 구현",
+        "description": "키워드 입력을 받아 LangChain을 사용하여 SEO 최적화 제목을 생성하는 모듈을 만듭니다. 키워드 포함 및 클릭 유도 요소가 있는 50-60자 제목을 보장합니다",
+        "details": "```python\nfrom langchain.prompts import ChatPromptTemplate\nfrom langchain.chains import LLMChain\n\nclass TitleGenerator:\n    def __init__(self, llm):\n        self.llm = llm\n        self.prompt = ChatPromptTemplate.from_template(\n            \"\"\"키워드에 대한 SEO 최적화 블로그 제목을 생성하세요: {keyword}\n            요구사항:\n            - 길이: 50-60자\n            - 키워드를 자연스럽게 포함해야 함\n            - 클릭 유도 요소 포함 (숫자, 방법, 혜택)\n            - 한국어\n            - 매력적이고 정보성 있음\n            \n            제목만 반환하고, 설명은 포함하지 마세요.\"\"\"\n        )\n        self.chain = LLMChain(llm=self.llm, prompt=self.prompt)\n    \n    def generate_title(self, keyword: str, max_retries: int = 3) -> str:\n        for attempt in range(max_retries):\n            try:\n                title = self.chain.run(keyword=keyword).strip()\n                if self._validate_title(title, keyword):\n                    return title\n            except Exception as e:\n                if attempt == max_retries - 1:\n                    raise\n        return f\"{keyword} 완벽 가이드: 알아야 할 모든 것\"\n    \n    def _validate_title(self, title: str, keyword: str) -> bool:\n        return (\n            keyword.lower() in title.lower() and\n            50 <= len(title) <= 60 and\n            not title.startswith('\"') and\n            not title.endswith('\"')\n        )\n```",
+        "testStrategy": "1. 다양한 한국어 키워드로 테스트\n2. 제목 길이 제약 조건 확인 (50-60자)\n3. 생성된 제목에 키워드 포함 여부 확인\n4. 강제 실패로 재시도 메커니즘 테스트\n5. 폴백 제목 생성 검증\n6. 성공률 측정 (목표 >95%)",
+        "priority": "high",
+        "dependencies": [
+          11
+        ],
+        "status": "done",
+        "subtasks": []
+      },
+      {
+        "id": 13,
+        "title": "구조화된 출력으로 JSON 아웃라인 생성 구축",
+        "description": "LangChain의 PydanticOutputParser를 사용하여 유효한 JSON 구조의 H2/H3 계층을 보장하는 아웃라인 생성 모듈을 구현합니다. 선택적 H3 하위 섹션과 함께 5-7개의 H2 섹션을 목표로 합니다",
+        "details": "```python\nfrom langchain.output_parsers import PydanticOutputParser, OutputFixingParser\nfrom langchain.schema import OutputParserException\n\nclass OutlineGenerator:\n    def __init__(self, llm):\n        self.llm = llm\n        self.parser = PydanticOutputParser(pydantic_object=BlogOutline)\n        self.fixing_parser = OutputFixingParser.from_llm(parser=self.parser, llm=llm)\n        \n        self.prompt = ChatPromptTemplate.from_template(\n            \"\"\"제목이 다음인 기사의 구조화된 블로그 아웃라인을 생성하세요: {title}\n            키워드: {keyword}\n            \n            요구사항:\n            - 5-7개의 H2 섹션 생성\n            - 필요한 경우에만 2-3개의 H3 하위 섹션 추가\n            - 도입부에서 결론까지 논리적 흐름 보장\n            - 주제의 모든 측면을 포괄적으로 다룸\n            - 한국어 사용\n            \n            형식 지침:\n            \n            아웃라인을 생성하세요:\"\"\"\n        )\n    \n    def generate_outline(self, title: str, keyword: str) -> BlogOutline:\n        format_instructions = self.parser.get_format_instructions()\n        \n        chain = LLMChain(\n            llm=self.llm,\n            prompt=self.prompt\n        )\n        \n        try:\n            response = chain.run(\n                title=title,\n                keyword=keyword,\n                format_instructions=format_instructions\n            )\n            return self.parser.parse(response)\n        except OutputParserException:\n            # 폴백으로 수정 파서 사용\n            return self.fixing_parser.parse(response)\n        except Exception as e:\n            # 비상 폴백 아웃라인\n            return self._create_fallback_outline(keyword)\n    \n    def _create_fallback_outline(self, keyword: str) -> BlogOutline:\n        return BlogOutline(sections=[\n            BlogSection(h2=f\"{keyword}란 무엇인가?\", h3=[]),\n            BlogSection(h2=f\"{keyword}의 주요 특징\", h3=[\"장점\", \"단점\"]),\n            BlogSection(h2=f\"{keyword} 활용 방법\", h3=[]),\n            BlogSection(h2=f\"{keyword} 주의사항\", h3=[]),\n            BlogSection(h2=\"결론\", h3=[])\n        ])\n```",
+        "testStrategy": "1. 유효/무효 출력으로 JSON 파싱 테스트\n2. H2 개수 확인 (5-7개 섹션)\n3. H3 분배 확인 (필요한 곳에 2-3개)\n4. OutputFixingParser 폴백 테스트\n5. 비상 폴백 아웃라인 검증\n6. 100% JSON 유효성 보장",
+        "priority": "high",
+        "dependencies": [
+          12
+        ],
+        "status": "done",
+        "subtasks": []
+      },
+      {
+        "id": 14,
+        "title": "메모리 관리를 통한 섹션 콘텐츠 생성 생성",
+        "description": "메모리 관리를 사용하여 섹션 간 컨텍스트를 유지하고, 섹션당 300-500자 콘텐츠를 생성하며, 문서 전반에 걸쳐 사실을 축적하는 섹션 생성기를 구축합니다",
+        "details": "```python\nfrom langchain.memory import ConversationSummaryMemory\nfrom typing import List, Dict\nimport re\n\nclass SectionGenerator:\n    def __init__(self, llm):\n        self.llm = llm\n        self.memory = ConversationSummaryMemory(llm=llm)\n        self.facts = []\n        self.section_summaries = []\n        \n        self.prompt = ChatPromptTemplate.from_template(\n            \"\"\"블로그 기사의 섹션을 작성하세요.\n            \n            기사 제목: {title}\n            현재 섹션 (H2): {h2_title}\n            하위 섹션 (H3): {h3_list}\n            \n            이전 섹션 요약:\n            {previous_summary}\n            \n            기사에서 알려진 사실들:\n            {facts}\n            \n            요구사항:\n            - 한국어로 300-500자 작성\n            - 이전 내용에서 자연스러운 흐름\n            - 구체적이고 사실적인 정보 포함\n            - H3 하위 섹션이 있다면 각각 다룰 것\n            - 일관된 톤과 스타일 유지\n            \n            섹션 내용을 작성하세요:\"\"\"\n        )\n    \n    def generate_section(self, title: str, h2_title: str, h3_list: List[str], \n                        section_index: int) -> Dict:\n        previous_summary = self._get_previous_summary()\n        facts_str = \"\\n\".join([f\"- {fact}\" for fact in self.facts[-5:]])\n        \n        response = self.llm.predict(\n            self.prompt.format(\n                title=title,\n                h2_title=h2_title,\n                h3_list=\", \".join(h3_list) if h3_list else \"없음\",\n                previous_summary=previous_summary,\n                facts=facts_str or \"아직 없음\"\n            )\n        )\n        \n        # 응답에서 사실 추출\n        new_facts = self._extract_facts(response)\n        self.facts.extend(new_facts)\n        \n        # 요약 생성\n        summary = self._generate_summary(h2_title, response)\n        self.section_summaries.append(summary)\n        \n        # 메모리 업데이트\n        self.memory.save_context(\n            {\"section\": h2_title},\n            {\"content\": response}\n        )\n        \n        return {\n            \"h2_id\": self._generate_id(h2_title),\n            \"draft_text\": response,\n            \"summary_3lines\": summary,\n            \"facts\": new_facts\n        }\n    \n    def _extract_facts(self, text: str) -> List[str]:\n        # 숫자, 퍼센티지 또는 구체적 주장이 있는 문장 추출\n        sentences = text.split('.')\n        facts = []\n        for sent in sentences:\n            if any(char.isdigit() for char in sent) or \n               any(keyword in sent for keyword in ['연구', '조사', '통계', '발표']):\n                facts.append(sent.strip() + '.')\n        return facts[:3]  # 섹션당 3개 사실로 제한\n    \n    def _generate_summary(self, h2_title: str, content: str) -> str:\n        return self.llm.predict(\n            f\"이 섹션 '{h2_title}'을 정확히 3줄로 요약하세요:\\n{content}\"\n        )[:150]\n    \n    def _get_previous_summary(self) -> str:\n        if not self.section_summaries:\n            return \"첫 번째 섹션입니다.\"\n        return \"\\n\".join(self.section_summaries[-2:])\n    \n    def _generate_id(self, h2_title: str) -> str:\n        return re.sub(r'[^a-zA-Z0-9가-힣]', '-', h2_title).lower()[:30]\n```",
+        "testStrategy": "1. 콘텐츠 길이 테스트 (300-500자)\n2. 섹션 간 메모리 지속성 확인\n3. 사실 추출 정확도 확인\n4. 요약 생성 검증 (3줄)\n5. 섹션 ID 생성 테스트\n6. 섹션 간 컨텍스트 연속성 보장",
+        "priority": "high",
+        "dependencies": [
+          13
+        ],
+        "status": "pending",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Initialize Memory Management",
+            "description": "Set up and configure ConversationSummaryMemory to maintain context between sections, ensuring previous content is summarized and accessible for subsequent section generation.",
+            "dependencies": [],
+            "details": "Implement ConversationSummaryMemory initialization with the LLM instance. Ensure memory is correctly updated and retrieved for each section, supporting context continuity.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 2,
+            "title": "Design Section Generation Prompt",
+            "description": "Develop a prompt template that guides the LLM to generate section content with required structure, length, and factual accumulation.",
+            "dependencies": [
+              "14.1"
+            ],
+            "details": "Create a ChatPromptTemplate that includes article title, current H2/H3, previous summaries, and accumulated facts. Ensure prompt enforces 300-500 character output, factual accuracy, and consistent tone.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 3,
+            "title": "Implement Section Content Generation",
+            "description": "Develop the logic to generate section content using the LLM and the designed prompt, integrating memory and fact accumulation.",
+            "dependencies": [
+              "14.1",
+              "14.2"
+            ],
+            "details": "Call the LLM with the constructed prompt for each section. Retrieve and update memory, pass relevant facts, and ensure generated content meets length and flow requirements.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 4,
+            "title": "Develop Fact Extraction Logic",
+            "description": "Implement a method to extract concrete facts (numbers, statistics, claims) from generated section content for accumulation and reuse.",
+            "dependencies": [
+              "14.3"
+            ],
+            "details": "Parse section text to identify sentences containing digits, percentages, or keywords (e.g., '연구', '통계'). Limit to 3 facts per section and append to the global fact list.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 5,
+            "title": "Implement Section Summary Generation",
+            "description": "Create a mechanism to summarize each section into exactly three lines for use in memory and context passing.",
+            "dependencies": [
+              "14.3"
+            ],
+            "details": "Use the LLM to generate a concise 3-line summary of each section's content. Store summaries for use in subsequent section prompts and memory updates.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 6,
+            "title": "Generate Section IDs",
+            "description": "Develop logic to create unique, URL-safe section IDs based on H2 titles for reference and downstream processing.",
+            "dependencies": [
+              "14.3"
+            ],
+            "details": "Implement a function that normalizes H2 titles by removing special characters and limiting length, ensuring IDs are unique and consistent.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 7,
+            "title": "Write and Validate Test Cases",
+            "description": "Design and implement test cases to verify each component: memory persistence, prompt correctness, content length, fact extraction, summary accuracy, and ID generation.",
+            "dependencies": [
+              "14.1",
+              "14.2",
+              "14.3",
+              "14.4",
+              "14.5",
+              "14.6"
+            ],
+            "details": "Create unit and integration tests for all major functions. Validate memory continuity, prompt output, fact extraction accuracy, summary constraints, and ID uniqueness.",
+            "status": "pending",
+            "testStrategy": ""
+          }
+        ]
+      },
+      {
+        "id": 15,
+        "title": "고정 CSS 클래스로 HTML 조립 모듈 구현",
+        "description": "하드코딩된 템플릿과 사전 정의된 CSS 클래스 시스템(fs-article, fs-title, fs-toc 등)을 사용하여 모든 섹션을 구조화된 HTML 문서로 결합하는 HTML 조립 모듈을 생성합니다",
+        "details": "```python\nfrom datetime import datetime\nfrom typing import List, Dict\nimport html\n\nclass HTMLAssembler:\n    def __init__(self):\n        self.css_classes = {\n            'article': 'fs-article',\n            'title': 'fs-title',\n            'toc': 'fs-toc',\n            'section': 'fs-section',\n            'content': 'fs-content',\n            'meta': 'fs-meta',\n            'card': 'fs-card',\n            'table': 'fs-table',\n            'btn': 'fs-btn'\n        }\n    \n    def assemble_html(self, state: BlogState) -> str:\n        toc_html = self._generate_toc(state.outline)\n        sections_html = self._generate_sections(state.sections, state.outline)\n        \n        html_template = f'''<!DOCTYPE html>\n<html lang=\"ko\">\n<head>\n    <meta charset=\"UTF-8\">\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n    <title>{html.escape(state.title)}</title>\n    <meta name=\"description\" content=\"{html.escape(state.title[:160])}\">\n</head>\n<body>\n    <article class=\"{self.css_classes['article']}\">\n        <header class=\"{self.css_classes['title']}\">\n            <h1>{html.escape(state.title)}</h1>\n            <div class=\"{self.css_classes['meta']}\">\n                {datetime.now().strftime('%Y년 %m월 %d일')} | SEO 최적화\n            </div>\n        </header>\n        \n        {toc_html}\n        \n        {sections_html}\n        \n        <footer class=\"{self.css_classes['section']}\">\n            <div class=\"{self.css_classes['card']}\">\n                <p>이 글이 도움이 되셨나요? 더 많은 정보를 원하시면 구독해주세요!</p>\n                <button class=\"{self.css_classes['btn']}\">구독하기</button>\n            </div>\n        </footer>\n    </article>\n</body>\n</html>'''\n        \n        return self._validate_html(html_template)\n    \n    def _generate_toc(self, outline: BlogOutline) -> str:\n        toc_items = []\n        for i, section in enumerate(outline.sections):\n            h2_id = self._generate_id(section.h2)\n            toc_items.append(f'<li><a href=\"#{h2_id}\">{html.escape(section.h2)}</a>')\n            \n            if section.h3:\n                toc_items.append('<ul>')\n                for h3 in section.h3:\n                    h3_id = self._generate_id(h3)\n                    toc_items.append(f'<li><a href=\"#{h3_id}\">{html.escape(h3)}</a></li>')\n                toc_items.append('</ul>')\n            \n            toc_items.append('</li>')\n        \n        return f'''\n        <nav class=\"{self.css_classes['toc']}\">\n            <h2>목차</h2>\n            <ul>\n                {''.join(toc_items)}\n            </ul>\n        </nav>'''\n    \n    def _generate_sections(self, sections: List[Dict], outline: BlogOutline) -> str:\n        sections_html = []\n        \n        for i, (section_data, outline_section) in enumerate(zip(sections, outline.sections)):\n            h2_id = section_data.get('h2_id', self._generate_id(outline_section.h2))\n            \n            section_html = f'''\n        <section class=\"{self.css_classes['section']}\" id=\"{h2_id}\">\n            <h2>{html.escape(outline_section.h2)}</h2>\n            <div class=\"{self.css_classes['content']}\">\n                {self._format_content(section_data['draft_text'], outline_section.h3)}\n            </div>\n        </section>'''\n            \n            sections_html.append(section_html)\n        \n        return '\\n'.join(sections_html)\n    \n    def _format_content(self, text: str, h3_list: List[str]) -> str:\n        # H3 섹션이 있다면 콘텐츠 분할\n        if h3_list:\n            paragraphs = text.split('\\n\\n')\n            formatted = []\n            h3_index = 0\n            \n            for para in paragraphs:\n                if h3_index < len(h3_list) and len(formatted) % 2 == 0:\n                    h3_id = self._generate_id(h3_list[h3_index])\n                    formatted.append(f'<h3 id=\"{h3_id}\">{html.escape(h3_list[h3_index])}</h3>')\n                    h3_index += 1\n                formatted.append(f'<p>{html.escape(para)}</p>')\n            \n            return '\\n'.join(formatted)\n        else:\n            return '\\n'.join([f'<p>{html.escape(p)}</p>' for p in text.split('\\n\\n')])\n    \n    def _generate_id(self, text: str) -> str:\n        import re\n        return re.sub(r'[^a-zA-Z0-9가-힣]', '-', text).lower()[:30]\n    \n    def _validate_html(self, html_content: str) -> str:\n        # 기본 HTML 검증\n        required_classes = ['fs-article', 'fs-title', 'fs-toc', 'fs-section']\n        for cls in required_classes:\n            if cls not in html_content:\n                raise ValueError(f\"필수 CSS 클래스 누락: {cls}\")\n        return html_content\n```",
+        "testStrategy": "1. 모든 필수 CSS 클래스 존재 확인\n2. 파서로 HTML 구조 유효성 테스트\n3. 다양한 아웃라인 구조로 TOC 생성 확인\n4. 적절한 HTML 이스케이핑 검증\n5. 섹션 ID 생성 고유성 테스트\n6. 100% 유효한 HTML 출력 보장",
+        "priority": "high",
+        "dependencies": [
+          14
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": 16,
+        "title": "WordPress REST API 통합 구축",
+        "description": "적절한 에러 처리 및 재시도 메커니즘과 함께 인증 및 초안 게시물 업로드 기능을 위한 WordPress REST API 클라이언트를 구현합니다",
+        "details": "```python\nimport requests\nfrom typing import Dict, Optional\nimport base64\nimport time\nfrom urllib.parse import urljoin\n\nclass WordPressConnector:\n    def __init__(self, site_url: str, username: str, password: str):\n        self.site_url = site_url.rstrip('/')\n        self.api_url = urljoin(self.site_url, '/wp-json/wp/v2/')\n        self.auth_header = self._create_auth_header(username, password)\n        self.session = requests.Session()\n        self.session.headers.update({\n            'Authorization': self.auth_header,\n            'Content-Type': 'application/json'\n        })\n    \n    def _create_auth_header(self, username: str, password: str) -> str:\n        credentials = f\"{username}:{password}\"\n        encoded = base64.b64encode(credentials.encode()).decode('ascii')\n        return f\"Basic {encoded}\"\n    \n    def upload_draft(self, title: str, content: str, \n                    categories: List[int] = None, \n                    tags: List[int] = None,\n                    max_retries: int = 3) -> Dict:\n        \"\"\"\n        WordPress에 초안 게시물 업로드\n        반환: 게시물 ID와 URL이 포함된 Dict\n        \"\"\"\n        post_data = {\n            'title': title,\n            'content': content,\n            'status': 'draft',\n            'categories': categories or [],\n            'tags': tags or [],\n            'format': 'standard',\n            'comment_status': 'open',\n            'ping_status': 'open'\n        }\n        \n        for attempt in range(max_retries):\n            try:\n                response = self.session.post(\n                    urljoin(self.api_url, 'posts'),\n                    json=post_data,\n                    timeout=30\n                )\n                \n                if response.status_code == 201:\n                    post = response.json()\n                    return {\n                        'id': post['id'],\n                        'link': post['link'],\n                        'edit_link': post['link'].replace(self.site_url, f\"{self.site_url}/wp-admin/post.php?post={post['id']}&action=edit\"),\n                        'status': 'success',\n                        'message': '초안이 성공적으로 업로드되었습니다'\n                    }\n                elif response.status_code == 401:\n                    raise Exception(\"인증 실패. 자격 증명을 확인하세요.\")\n                else:\n                    error_msg = response.json().get('message', '알 수 없는 오류')\n                    if attempt < max_retries - 1:\n                        time.sleep(2 ** attempt)  # 지수 백오프\n                        continue\n                    raise Exception(f\"업로드 실패: {error_msg}\")\n                    \n            except requests.exceptions.RequestException as e:\n                if attempt < max_retries - 1:\n                    time.sleep(2 ** attempt)\n                    continue\n                raise Exception(f\"네트워크 오류: {str(e)}\")\n        \n        return {\n            'status': 'error',\n            'message': '최대 재시도 횟수 초과'\n        }\n    \n    def test_connection(self) -> bool:\n        \"\"\"\n        WordPress API 연결 및 인증 테스트\n        \"\"\"\n        try:\n            response = self.session.get(\n                urljoin(self.api_url, 'users/me'),\n                timeout=10\n            )\n            return response.status_code == 200\n        except:\n            return False\n    \n    def get_categories(self) -> List[Dict]:\n        \"\"\"\n        게시물 할당을 위한 사용 가능한 카테고리 가져오기\n        \"\"\"\n        try:\n            response = self.session.get(\n                urljoin(self.api_url, 'categories'),\n                params={'per_page': 100}\n            )\n            if response.status_code == 200:\n                return response.json()\n            return []\n        except:\n            return []\n    \n    def create_media(self, image_url: str, alt_text: str = '') -> Optional[int]:\n        \"\"\"\n        WordPress 미디어 라이브러리에 미디어 업로드 (for future use)\n        \"\"\"\n        # Implementation for Phase 3\n        pass\n```",
+        "testStrategy": "1. 유효/무효 자격 증명으로 인증 테스트\n2. 초안 게시물 생성 확인\n3. 시뮬레이션된 실패로 재시도 메커니즘 테스트\n4. 네트워크 문제에 대한 에러 처리 확인\n5. 반환된 게시물 URL 검증\n6. >95% 업로드 성공률 보장",
+        "priority": "medium",
+        "dependencies": [
+          15
+        ],
+        "status": "pending",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Implement API Authentication Logic",
+            "description": "Develop robust authentication mechanisms for the WordPress REST API client, supporting Basic Auth and extensible for JWT or OAuth2 as needed.",
+            "dependencies": [],
+            "details": "Ensure secure handling of credentials and tokens. Integrate authentication plugins or application passwords as recommended for production environments.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 2,
+            "title": "Develop Draft Post Upload Functionality",
+            "description": "Create methods to upload draft posts to WordPress via the REST API, including support for title, content, categories, and tags.",
+            "dependencies": [
+              "16.1"
+            ],
+            "details": "Implement the POST request to /wp-json/wp/v2/posts with appropriate payload and handle the response to extract post ID and URLs.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 3,
+            "title": "Integrate Error Handling and Retry Mechanism",
+            "description": "Add comprehensive error handling for network and API errors, and implement an exponential backoff retry strategy for transient failures.",
+            "dependencies": [
+              "16.2"
+            ],
+            "details": "Detect authentication failures, network issues, and API errors. Ensure retries are capped and error messages are informative.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 4,
+            "title": "Implement Category and Tag Retrieval",
+            "description": "Develop functionality to fetch available categories and tags from the WordPress REST API for post assignment.",
+            "dependencies": [
+              "16.1"
+            ],
+            "details": "Use GET requests to /wp-json/wp/v2/categories and /wp-json/wp/v2/tags, and parse the results for use in post creation.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 5,
+            "title": "Create Media Upload Placeholder",
+            "description": "Set up a placeholder method for future media uploads to the WordPress media library via the REST API.",
+            "dependencies": [
+              "16.1"
+            ],
+            "details": "Define the method signature and document intended usage. Leave implementation for a later phase.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 6,
+            "title": "Implement Connection Test Functionality",
+            "description": "Develop a method to test the WordPress REST API connection and authentication status.",
+            "dependencies": [
+              "16.1"
+            ],
+            "details": "Send a GET request to /wp-json/wp/v2/users/me and verify a successful response to confirm connectivity and authentication.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 7,
+            "title": "Write Comprehensive Test Cases",
+            "description": "Design and implement test cases covering authentication, draft upload, error handling, category/tag retrieval, and connection testing.",
+            "dependencies": [
+              "16.2",
+              "16.3",
+              "16.4",
+              "16.5",
+              "16.6"
+            ],
+            "details": "Include tests for valid/invalid credentials, simulated failures, network errors, and verify returned post URLs and data integrity.",
+            "status": "pending",
+            "testStrategy": ""
+          }
+        ]
+      },
+      {
+        "id": 17,
+        "title": "메인 파이프라인 오케스트레이터 생성",
+        "description": "모든 모듈을 조정하고, 상태 전환을 관리하며, 전체 블로그 생성 프로세스를 위한 통합 인터페이스를 제공하는 메인 파이프라인 오케스트레이터를 구축합니다",
+        "details": "```python\nfrom typing import Optional, Dict\nimport logging\nimport json\nfrom datetime import datetime\nimport sqlite3\n\nclass BlogGenerationPipeline:\n    def __init__(self, config: Dict):\n        self.config = config\n        self.llm = self._init_llm()\n        \n        # 모든 모듈 초기화\n        self.title_generator = TitleGenerator(self.llm)\n        self.outline_generator = OutlineGenerator(self.llm)\n        self.section_generator = SectionGenerator(self.llm)\n        self.html_assembler = HTMLAssembler()\n        self.wp_connector = WordPressConnector(\n            config['wordpress']['url'],\n            config['wordpress']['username'],\n            config['wordpress']['password']\n        )\n        \n        # 로깅 설정\n        self.logger = self._setup_logging()\n        \n        # 상태 지속성 설정\n        self.db = self._init_database()\n    \n    def _init_llm(self):\n        if self.config['llm']['provider'] == 'openai':\n            return ChatOpenAI(\n                model=self.config['llm']['model'],\n                temperature=0.7\n            )\n        else:\n            return ChatAnthropic(\n                model=self.config['llm']['model'],\n                temperature=0.7\n            )\n    \n    def _setup_logging(self) -> logging.Logger:\n        logger = logging.getLogger('blog_pipeline')\n        logger.setLevel(logging.INFO)\n        \n        # 파일 핸들러\n        fh = logging.FileHandler('blog_generation.log')\n        fh.setLevel(logging.INFO)\n        \n        # 콘솔 핸들러\n        ch = logging.StreamHandler()\n        ch.setLevel(logging.INFO)\n        \n        formatter = logging.Formatter(\n            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'\n        )\n        fh.setFormatter(formatter)\n        ch.setFormatter(formatter)\n        \n        logger.addHandler(fh)\n        logger.addHandler(ch)\n        \n        return logger\n    \n    def _init_database(self) -> sqlite3.Connection:\n        conn = sqlite3.connect('blog_states.db')\n        conn.execute('''\n            CREATE TABLE IF NOT EXISTS blog_states (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                keyword TEXT NOT NULL,\n                state_json TEXT NOT NULL,\n                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n                status TEXT DEFAULT 'in_progress'\n            )\n        ''')\n        conn.commit()\n        return conn\n    \n    def generate_blog(self, keyword: str, \n                     auto_upload: bool = True,\n                     progress_callback: Optional[callable] = None) -> Dict:\n        \"\"\"\n        메인 파이프라인 실행 메서드\n        \"\"\"\n        start_time = datetime.now()\n        state = BlogState(keyword=keyword, metadata={'created_at': start_time})\n        \n        try:\n            # 단계 1: 제목 생성\n            self.logger.info(f\"키워드로 블로그 생성 시작: {keyword}\")\n            if progress_callback:\n                progress_callback('title_generation', 0.1)\n            \n            state.title = self.title_generator.generate_title(keyword)\n            self.logger.info(f\"생성된 제목: {state.title}\")\n            self._save_state(state)\n            \n            # 단계 2: 아웃라인 생성\n            if progress_callback:\n                progress_callback('outline_generation', 0.2)\n            \n            state.outline = self.outline_generator.generate_outline(\n                state.title, keyword\n            )\n            self.logger.info(f\"{len(state.outline.sections)}개 섹션으로 아웃라인 생성됨\")\n            self._save_state(state)\n            \n            # 단계 3: 섹션 생성\n            total_sections = len(state.outline.sections)\n            for i, section in enumerate(state.outline.sections):\n                if progress_callback:\n                    progress = 0.2 + (0.5 * (i + 1) / total_sections)\n                    progress_callback('section_generation', progress, \n                                    f\"섹션 {i+1}/{total_sections} 생성 중\")\n                \n                section_data = self.section_generator.generate_section(\n                    state.title,\n                    section.h2,\n                    section.h3,\n                    i\n                )\n                state.sections.append(section_data)\n                self.logger.info(f\"섹션 {i+1} 생성 완료: {section.h2}\")\n                self._save_state(state)\n            \n            # 단계 4: HTML 조립\n            if progress_callback:\n                progress_callback('html_assembly', 0.8)\n            \n            html_content = self.html_assembler.assemble_html(state)\n            self.logger.info(\"HTML 조립 완료\")\n            \n            # 단계 5: WordPress 업로드 (if enabled)\n            upload_result = None\n            if auto_upload:\n                if progress_callback:\n                    progress_callback('wordpress_upload', 0.9)\n                \n                upload_result = self.wp_connector.upload_draft(\n                    state.title,\n                    html_content\n                )\n                self.logger.info(f\"WordPress 업로드: {upload_result['status']}\")\n            \n            # 메트릭 계산\n            end_time = datetime.now()\n            duration = (end_time - start_time).total_seconds()\n            \n            # 최종 상태 업데이트\n            state.metadata.update({\n                'completed_at': end_time,\n                'duration_seconds': duration,\n                'word_count': sum(len(s['draft_text']) for s in state.sections),\n                'upload_result': upload_result\n            })\n            self._save_state(state, status='completed')\n            \n            if progress_callback:\n                progress_callback('completed', 1.0)\n            \n            return {\n                'success': True,\n                'state': state.dict(),\n                'html': html_content,\n                'upload_result': upload_result,\n                'metrics': {\n                    'duration': duration,\n                    'sections': len(state.sections),\n                    'word_count': state.metadata['word_count']\n                }\n            }\n            \n        except Exception as e:\n            self.logger.error(f\"파이프라인 실패: {str(e)}\", exc_info=True)\n            self._save_state(state, status='failed')\n            \n            return {\n                'success': False,\n                'error': str(e),\n                'state': state.dict(),\n                'partial_html': self._generate_partial_html(state)\n            }\n    \n    def _save_state(self, state: BlogState, status: str = 'in_progress'):\n        \"\"\"\n        복구를 위해 데이터베이스에 상태 저장\n        \"\"\"\n        cursor = self.db.cursor()\n        state_json = json.dumps(state.dict(), ensure_ascii=False)\n        \n        cursor.execute('''\n            INSERT OR REPLACE INTO blog_states \n            (keyword, state_json, updated_at, status)\n            VALUES (?, ?, CURRENT_TIMESTAMP, ?)\n        ''', (state.keyword, state_json, status))\n        \n        self.db.commit()\n    \n    def _generate_partial_html(self, state: BlogState) -> Optional[str]:\n        \"\"\"\n        복구를 위해 부분 상태에서 HTML 생성\n        \"\"\"\n        if state.sections:\n            try:\n                return self.html_assembler.assemble_html(state)\n            except:\n                return None\n        return None\n    \n    def resume_generation(self, keyword: str) -> Optional[Dict]:\n        \"\"\"\n        실패하거나 불완전한 생성 재개\n        \"\"\"\n        cursor = self.db.cursor()\n        result = cursor.execute(\n            'SELECT state_json FROM blog_states WHERE keyword = ? ORDER BY id DESC LIMIT 1',\n            (keyword,)\n        ).fetchone()\n        \n        if result:\n            state_dict = json.loads(result[0])\n            # 마지막 성공 단계에서 재개\n            # 구현 세부사항...\n            pass\n        \n        return None\n```",
+        "testStrategy": "1. 샘플 키워드로 전체 파이프라인 실행 테스트\n2. 각 단계에서 상태 지속성 확인\n3. 진행률 콜백 기능 테스트\n4. 실패 시뮬레이션 및 복구 테스트\n5. 엔드투엔드 생성 시간 측정 (<3분 목표)\n6. 모든 모듈 통합 검증",
+        "priority": "high",
+        "dependencies": [
+          11,
+          12,
+          13,
+          14,
+          15,
+          16
+        ],
+        "status": "pending",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Module Initialization",
+            "description": "Initialize all required modules (TitleGenerator, OutlineGenerator, SectionGenerator, HTMLAssembler, WordPressConnector) and configure the LLM provider based on the pipeline configuration.",
+            "dependencies": [],
+            "details": "Ensure each module is instantiated with correct dependencies and configuration parameters. Validate LLM provider selection and module readiness.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 2,
+            "title": "Logging System Setup",
+            "description": "Configure logging for the pipeline, including file and console handlers, formatting, and log level management.",
+            "dependencies": [
+              "17.1"
+            ],
+            "details": "Set up logging to capture pipeline events, errors, and progress. Ensure logs are written to both file and console with appropriate formatting.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 3,
+            "title": "Database State Persistence",
+            "description": "Initialize and manage the SQLite database for storing pipeline states, including schema creation and state update logic.",
+            "dependencies": [
+              "17.1"
+            ],
+            "details": "Create the 'blog_states' table if not exists. Implement methods for saving, updating, and retrieving pipeline states for recovery and auditing.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 4,
+            "title": "Stepwise Execution: Title Generation",
+            "description": "Implement the logic for generating an SEO-optimized blog title using the TitleGenerator module and update the pipeline state.",
+            "dependencies": [
+              "17.1",
+              "17.2",
+              "17.3"
+            ],
+            "details": "Trigger title generation, log progress, update state in DB, and handle errors gracefully. Integrate progress callback for UI feedback.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 5,
+            "title": "Stepwise Execution: Outline and Section Generation",
+            "description": "Generate the blog outline and sections sequentially, updating state and logging after each step.",
+            "dependencies": [
+              "17.4"
+            ],
+            "details": "Use OutlineGenerator to create structured outline, then SectionGenerator to produce content for each section. Save intermediate states and progress.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 6,
+            "title": "Stepwise Execution: HTML Assembly and WordPress Upload",
+            "description": "Assemble the generated sections into HTML and optionally upload the draft to WordPress, updating state and logging results.",
+            "dependencies": [
+              "17.5"
+            ],
+            "details": "Use HTMLAssembler to create final HTML. If auto-upload is enabled, use WordPressConnector to upload. Log and persist upload results.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 7,
+            "title": "Progress Callback Integration",
+            "description": "Integrate progress callback functionality to report real-time status updates at each pipeline stage.",
+            "dependencies": [
+              "17.4",
+              "17.5",
+              "17.6"
+            ],
+            "details": "Invoke progress_callback with appropriate stage identifiers and progress percentages. Ensure callbacks are triggered at all major steps.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 8,
+            "title": "Failure Recovery and Partial HTML Generation",
+            "description": "Implement mechanisms to recover from failures, resume incomplete generations, and generate partial HTML from available state.",
+            "dependencies": [
+              "17.3",
+              "17.5",
+              "17.6"
+            ],
+            "details": "On exception, save failed state, attempt partial HTML generation, and provide resume functionality to continue from last successful step.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 9,
+            "title": "Test Case Development",
+            "description": "Develop comprehensive unit and integration tests for all pipeline components, including state persistence, progress callbacks, and recovery logic.",
+            "dependencies": [
+              "17.1",
+              "17.2",
+              "17.3",
+              "17.4",
+              "17.5",
+              "17.6",
+              "17.7",
+              "17.8"
+            ],
+            "details": "Write tests to validate correct behavior under normal and failure scenarios. Ensure coverage for all critical paths and edge cases.",
+            "status": "pending",
+            "testStrategy": ""
+          }
+        ]
+      },
+      {
+        "id": 18,
+        "title": "에러 처리 및 재시도 로직 구현",
+        "description": "LLM 실패, JSON 파싱 오류, 네트워크 문제에 대한 재시도 메커니즘으로 파이프라인 안정성을 보장하는 포괄적인 에러 처리 시스템을 생성합니다",
+        "details": "```python\nimport functools\nimport time\nfrom typing import TypeVar, Callable, Any, Optional, Type\nfrom enum import Enum\nimport traceback\n\nT = TypeVar('T')\n\nclass RetryStrategy(Enum):\n    EXPONENTIAL = \"exponential\"\n    LINEAR = \"linear\"\n    FIXED = \"fixed\"\n\nclass BlogGenerationError(Exception):\n    \"\"\"블로그 생성 파이프라인 기본 예외\"\"\"\n    pass\n\nclass LLMError(BlogGenerationError):\n    \"\"\"LLM 관련 오류\"\"\"\n    pass\n\nclass ParsingError(BlogGenerationError):\n    \"\"\"JSON/출력 파싱 오류\"\"\"\n    pass\n\nclass NetworkError(BlogGenerationError):\n    \"\"\"네트워크 관련 오류\"\"\"\n    pass\n\ndef retry_with_backoff(\n    max_attempts: int = 3,\n    strategy: RetryStrategy = RetryStrategy.EXPONENTIAL,\n    base_delay: float = 1.0,\n    max_delay: float = 60.0,\n    exceptions: tuple = (Exception,),\n    on_retry: Optional[Callable] = None\n) -> Callable:\n    \"\"\"\n    구성 가능한 백오프 전략으로 재시도 로직 데코레이터\n    \"\"\"\n    def decorator(func: Callable[..., T]) -> Callable[..., T]:\n        @functools.wraps(func)\n        def wrapper(*args, **kwargs) -> T:\n            last_exception = None\n            \n            for attempt in range(max_attempts):\n                try:\n                    return func(*args, **kwargs)\n                except exceptions as e:\n                    last_exception = e\n                    \n                    if attempt == max_attempts - 1:\n                        break\n                    \n                    # 지연 시간 계산\n                    if strategy == RetryStrategy.EXPONENTIAL:\n                        delay = min(base_delay * (2 ** attempt), max_delay)\n                    elif strategy == RetryStrategy.LINEAR:\n                        delay = min(base_delay * (attempt + 1), max_delay)\n                    else:  # FIXED\n                        delay = base_delay\n                    \n                    # 제공된 경우 재시도 콜백 호출\n                    if on_retry:\n                        on_retry(attempt + 1, delay, e)\n                    \n                    time.sleep(delay)\n            \n            # 모든 재시도 소진\n            raise last_exception\n        \n        return wrapper\n    return decorator\n\nclass ErrorHandler:\n    def __init__(self, logger):\n        self.logger = logger\n        self.error_counts = {}\n    \n    def handle_llm_error(self, error: Exception, context: Dict) -> Optional[Any]:\n        \"\"\"\n        폴백 전략과 함께 LLM 특정 오류 처리\n        \"\"\"\n        error_type = type(error).__name__\n        self.error_counts[error_type] = self.error_counts.get(error_type, 0) + 1\n        \n        self.logger.error(f\"{context.get('operation', 'unknown')}에서 LLM 오류: {str(error)}\")\n        \n        # 오류 유형별 특정 처리\n        if \"rate_limit\" in str(error).lower():\n            self.logger.info(\"속도 제한 감지, 60초 대기 중...\")\n            time.sleep(60)\n            return \"retry\"\n        \n        elif \"timeout\" in str(error).lower():\n            self.logger.info(\"타임아웃 감지, 간단한 프롬프트 사용 중...\")\n            return \"simplify\"\n        \n        elif \"context_length\" in str(error).lower():\n            self.logger.info(\"컨텍스트가 너무 길어 자르는 중...\")\n            return \"truncate\"\n        \n        return None\n    \n    def handle_parsing_error(self, error: Exception, \n                           raw_output: str, \n                           expected_type: Type) -> Optional[Any]:\n        \"\"\"\n        파싱 오류 수정 시도\n        \"\"\"\n        self.logger.warning(f\"파싱 오류: {str(error)}\")\n        self.logger.debug(f\"원시 출력: {raw_output[:500]}...\")\n        \n        # 마크다운 코드 블록에서 JSON 추출 시도\n        import re\n        json_match = re.search(r'```json\\s*(.+?)\\s*```', raw_output, re.DOTALL)\n        if json_match:\n            try:\n                import json\n                return json.loads(json_match.group(1))\n            except:\n                pass\n        \n        # 일반적인 JSON 오류 수정 시도\n        fixed_output = raw_output\n        # 후행 쉼표 제거\n        fixed_output = re.sub(r',\\s*}', '}', fixed_output)\n        fixed_output = re.sub(r',\\s*]', ']', fixed_output)\n        \n        try:\n            import json\n            return json.loads(fixed_output)\n        except:\n            return None\n    \n    def create_fallback_content(self, operation: str, context: Dict) -> Any:\n        \"\"\"\n        모든 재시도가 실패했을 때 폴백 콘텐츠 생성\n        \"\"\"\n        self.logger.info(f\"{operation}에 대한 폴백 콘텐츠 생성\")\n        \n        if operation == \"title_generation\":\n            keyword = context.get('keyword', '')\n            return f\"{keyword} 완벽 가이드: 알아야 할 모든 것\"\n        \n        elif operation == \"outline_generation\":\n            keyword = context.get('keyword', '')\n            return BlogOutline(sections=[\n                BlogSection(h2=f\"{keyword}란?\", h3=[]),\n                BlogSection(h2=f\"{keyword}의 특징\", h3=[\"장점\", \"단점\"]),\n                BlogSection(h2=f\"{keyword} 활용법\", h3=[]),\n                BlogSection(h2=\"주의사항\", h3=[]),\n                BlogSection(h2=\"결론\", h3=[])\n            ])\n        \n        elif operation == \"section_generation\":\n            h2_title = context.get('h2_title', '')\n            return {\n                \"h2_id\": self._generate_id(h2_title),\n                \"draft_text\": f\"{h2_title}에 대한 내용입니다. 자세한 정보는 추가 편집이 필요합니다.\",\n                \"summary_3lines\": f\"{h2_title} 섹션 요약\",\n                \"facts\": []\n            }\n        \n        return None\n    \n    def _generate_id(self, text: str) -> str:\n        import re\n        return re.sub(r'[^a-zA-Z0-9가-힣]', '-', text).lower()[:30]\n\n# 에러 처리가 강화된 모듈 메서드\nclass EnhancedTitleGenerator(TitleGenerator):\n    def __init__(self, llm, error_handler: ErrorHandler):\n        super().__init__(llm)\n        self.error_handler = error_handler\n    \n    @retry_with_backoff(\n        max_attempts=3,\n        exceptions=(LLMError, Exception),\n        strategy=RetryStrategy.EXPONENTIAL\n    )\n    def generate_title(self, keyword: str) -> str:\n        try:\n            return super().generate_title(keyword)\n        except Exception as e:\n            action = self.error_handler.handle_llm_error(\n                e, {'operation': 'title_generation', 'keyword': keyword}\n            )\n            \n            if action == \"retry\":\n                raise  # 재시도 트리거\n            \n            # 폴백 사용\n            return self.error_handler.create_fallback_content(\n                'title_generation', {'keyword': keyword}\n            )\n\n# 섹션 재생성 기능\nclass SectionRegenerator:\n    def __init__(self, section_generator: SectionGenerator, \n                 error_handler: ErrorHandler):\n        self.section_generator = section_generator\n        self.error_handler = error_handler\n    \n    def regenerate_section(self, state: BlogState, \n                          section_index: int,\n                          reason: str = \"manual\") -> Dict:\n        \"\"\"\n        특정 섹션 재생성\n        \"\"\"\n        if section_index >= len(state.outline.sections):\n            raise ValueError(f\"잘못된 섹션 인덱스: {section_index}\")\n        \n        section = state.outline.sections[section_index]\n        \n        # 이 섹션에 대한 메모리 지우기\n        self.section_generator.section_summaries = \n            self.section_generator.section_summaries[:section_index]\n        \n        try:\n            new_section = self.section_generator.generate_section(\n                state.title,\n                section.h2,\n                section.h3,\n                section_index\n            )\n            \n            # 상태 업데이트\n            state.sections[section_index] = new_section\n            \n            return {\n                'success': True,\n                'section': new_section,\n                'reason': reason\n            }\n            \n        except Exception as e:\n            return {\n                'success': False,\n                'error': str(e),\n                'fallback': self.error_handler.create_fallback_content(\n                    'section_generation',\n                    {'h2_title': section.h2}\n                )\n            }\n```",
+        "testStrategy": "1. 다양한 전략으로 재시도 데코레이터 테스트\n2. 다양한 오류 유형 시뮬레이션 (속도 제한, 타임아웃, 파싱)\n3. 폴백 콘텐츠 생성 확인\n4. 섹션 재생성 기능 테스트\n5. 오류 복구 성공률 측정\n6. 오류 로깅 및 메트릭 검증",
+        "priority": "high",
+        "dependencies": [
+          17
+        ],
+        "status": "pending",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Implement Retry Decorator with Configurable Backoff",
+            "description": "Develop a reusable decorator that applies retry logic with configurable strategies (exponential, linear, fixed) and supports custom exception types.",
+            "dependencies": [],
+            "details": "Ensure the decorator can be applied to any function, supports max attempts, and allows for an on-retry callback for logging or metrics.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 2,
+            "title": "Design Error Type-Specific Handlers",
+            "description": "Create dedicated handler methods for LLM errors, parsing errors, and network errors, each with tailored logic for diagnosis and recovery.",
+            "dependencies": [
+              "18.1"
+            ],
+            "details": "Handlers should log errors, increment error counters, and determine the appropriate recovery or fallback action based on error content.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 3,
+            "title": "Implement Fallback Content Generation",
+            "description": "Develop mechanisms to generate fallback content for each pipeline stage (title, outline, section) when all retries fail.",
+            "dependencies": [
+              "18.2"
+            ],
+            "details": "Fallbacks should be context-aware and provide minimally viable outputs to maintain pipeline continuity.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 4,
+            "title": "Develop Parsing Error Correction Logic",
+            "description": "Implement routines to detect and attempt to fix common JSON and output parsing errors, including malformed structures and trailing commas.",
+            "dependencies": [
+              "18.2"
+            ],
+            "details": "Include extraction from markdown code blocks and basic string corrections before re-attempting parsing.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 5,
+            "title": "Enhance LLM Error Handling Strategies",
+            "description": "Expand LLM error handling to cover rate limits, timeouts, and context length issues with specific mitigation actions (e.g., wait, simplify prompt, truncate context).",
+            "dependencies": [
+              "18.2"
+            ],
+            "details": "Integrate these strategies into the error handler and ensure they trigger appropriate retry or fallback flows.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 6,
+            "title": "Integrate Section Regeneration Functionality",
+            "description": "Enable targeted regeneration of failed or suboptimal sections, clearing relevant state and applying error handling and fallback logic.",
+            "dependencies": [
+              "18.3",
+              "18.4",
+              "18.5"
+            ],
+            "details": "Ensure the regeneration process updates pipeline state and returns structured results indicating success, error, or fallback usage.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 7,
+            "title": "Connect Logging and Metrics Collection",
+            "description": "Integrate robust logging and error metrics tracking throughout all error handling and retry flows for observability and diagnostics.",
+            "dependencies": [
+              "18.1",
+              "18.2",
+              "18.3",
+              "18.4",
+              "18.5",
+              "18.6"
+            ],
+            "details": "Log error types, retry attempts, fallback activations, and recovery rates; expose metrics for monitoring and alerting.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 8,
+            "title": "Write Comprehensive Test Cases",
+            "description": "Develop unit and integration tests covering all error types, retry strategies, fallback scenarios, and section regeneration logic.",
+            "dependencies": [
+              "18.1",
+              "18.2",
+              "18.3",
+              "18.4",
+              "18.5",
+              "18.6",
+              "18.7"
+            ],
+            "details": "Simulate LLM failures, parsing errors, and network issues; verify correct error handling, logging, and fallback behaviors.",
+            "status": "pending",
+            "testStrategy": ""
+          }
+        ]
+      },
+      {
+        "id": 19,
+        "title": "로깅 및 모니터링 시스템 생성",
+        "description": "파이프라인 상태, 성공률, 생성 품질을 추적하기 위한 포괄적인 로깅, 성능 모니터링 및 메트릭 수집 시스템을 구현합니다",
+        "details": "```python\nimport logging\nimport json\nfrom datetime import datetime\nfrom typing import Dict, List, Optional\nimport sqlite3\nfrom dataclasses import dataclass, asdict\nimport statistics\nfrom collections import defaultdict\n\n@dataclass\nclass GenerationMetrics:\n    keyword: str\n    title_generation_time: float\n    outline_generation_time: float\n    section_generation_times: List[float]\n    html_assembly_time: float\n    upload_time: Optional[float]\n    total_time: float\n    word_count: int\n    section_count: int\n    success: bool\n    error_type: Optional[str]\n    timestamp: datetime\n\nclass MetricsCollector:\n    def __init__(self, db_path: str = \"metrics.db\"):\n        self.db = self._init_db(db_path)\n        self.current_metrics = {}\n        self.timers = {}\n    \n    def _init_db(self, db_path: str) -> sqlite3.Connection:\n        conn = sqlite3.connect(db_path)\n        conn.execute('''\n            CREATE TABLE IF NOT EXISTS generation_metrics (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                keyword TEXT NOT NULL,\n                title_generation_time REAL,\n                outline_generation_time REAL,\n                section_generation_times TEXT,\n                html_assembly_time REAL,\n                upload_time REAL,\n                total_time REAL,\n                word_count INTEGER,\n                section_count INTEGER,\n                success BOOLEAN,\n                error_type TEXT,\n                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n            )\n        ''')\n        \n        conn.execute('''\n            CREATE TABLE IF NOT EXISTS quality_scores (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                keyword TEXT NOT NULL,\n                readability_score REAL,\n                seo_score REAL,\n                uniqueness_score REAL,\n                overall_score REAL,\n                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n            )\n        ''')\n        \n        conn.commit()\n        return conn\n    \n    def start_timer(self, operation: str):\n        \"\"\"작업 타이밍 시작\"\"\"\n        self.timers[operation] = datetime.now()\n    \n    def end_timer(self, operation: str) -> float:\n        \"\"\"타이밍 종료 및 초 단위 지속 시간 반환\"\"\"\n        if operation in self.timers:\n            duration = (datetime.now() - self.timers[operation]).total_seconds()\n            del self.timers[operation]\n            return duration\n        return 0.0\n    \n    def record_generation(self, metrics: GenerationMetrics):\n        \"\"\"데이터베이스에 생성 메트릭 기록\"\"\"\n        cursor = self.db.cursor()\n        cursor.execute('''\n            INSERT INTO generation_metrics \n            (keyword, title_generation_time, outline_generation_time,\n             section_generation_times, html_assembly_time, upload_time,\n             total_time, word_count, section_count, success, error_type)\n            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)\n        ''', (\n            metrics.keyword,\n            metrics.title_generation_time,\n            metrics.outline_generation_time,\n            json.dumps(metrics.section_generation_times),\n            metrics.html_assembly_time,\n            metrics.upload_time,\n            metrics.total_time,\n            metrics.word_count,\n            metrics.section_count,\n            metrics.success,\n            metrics.error_type\n        ))\n        self.db.commit()\n    \n    def get_success_rate(self, days: int = 7) -> float:\n        \"\"\"지난 N일간 성공률 계산\"\"\"\n        cursor = self.db.cursor()\n        result = cursor.execute('''\n            SELECT \n                COUNT(CASE WHEN success = 1 THEN 1 END) as successes,\n                COUNT(*) as total\n            FROM generation_metrics\n            WHERE timestamp > datetime('now', '-{} days')\n        '''.format(days)).fetchone()\n        \n        if result and result[1] > 0:\n            return (result[0] / result[1]) * 100\n        return 0.0\n    \n    def get_average_generation_time(self, days: int = 7) -> Dict[str, float]:\n        \"\"\"작업별 평균 생성 시간 가져오기\"\"\"\n        cursor = self.db.cursor()\n        results = cursor.execute('''\n            SELECT \n                AVG(title_generation_time) as avg_title,\n                AVG(outline_generation_time) as avg_outline,\n                AVG(html_assembly_time) as avg_html,\n                AVG(upload_time) as avg_upload,\n                AVG(total_time) as avg_total\n            FROM generation_metrics\n            WHERE timestamp > datetime('now', '-{} days')\n            AND success = 1\n        '''.format(days)).fetchone()\n        \n        return {\n            'title': results[0] or 0,\n            'outline': results[1] or 0,\n            'html': results[2] or 0,\n            'upload': results[3] or 0,\n            'total': results[4] or 0\n        }\n    \n    def get_error_distribution(self, days: int = 7) -> Dict[str, int]:\n        \"\"\"오류 유형 분포 가져오기\"\"\"\n        cursor = self.db.cursor()\n        results = cursor.execute('''\n            SELECT error_type, COUNT(*) as count\n            FROM generation_metrics\n            WHERE timestamp > datetime('now', '-{} days')\n            AND success = 0\n            AND error_type IS NOT NULL\n            GROUP BY error_type\n        '''.format(days)).fetchall()\n        \n        return {error: count for error, count in results}\n\nclass QualityMonitor:\n    def __init__(self, metrics_collector: MetricsCollector):\n        self.metrics = metrics_collector\n    \n    def calculate_readability_score(self, text: str) -> float:\n        \"\"\"\n        가독성 점수 계산 (한국어 텍스트에 대해 단순화됨)\n        \"\"\"\n        sentences = text.split('.')\n        words = text.split()\n        \n        if not sentences or not words:\n            return 0.0\n        \n        avg_sentence_length = len(words) / len(sentences)\n        \n        # 간단한 점수 매기기: 문장당 15-25단어 선호\n        if 15 <= avg_sentence_length <= 25:\n            score = 100\n        else:\n            score = max(0, 100 - abs(avg_sentence_length - 20) * 2)\n        \n        return score\n    \n    def calculate_seo_score(self, state: BlogState) -> float:\n        \"\"\"\n        SEO 최적화 점수 계산\n        \"\"\"\n        score = 0\n        \n        # 제목 확인\n        if state.title and state.keyword.lower() in state.title.lower():\n            score += 20\n        if state.title and 50 <= len(state.title) <= 60:\n            score += 10\n        \n        # 아웃라인 구조\n        if state.outline and 5 <= len(state.outline.sections) <= 7:\n            score += 20\n        \n        # 섹션의 키워드 밀도\n        total_text = ' '.join([s['draft_text'] for s in state.sections])\n        keyword_count = total_text.lower().count(state.keyword.lower())\n        word_count = len(total_text.split())\n        \n        if word_count > 0:\n            density = (keyword_count / word_count) * 100\n            if 1 <= density <= 3:  # 1-3% 키워드 밀도\n                score += 30\n            elif 0.5 <= density < 1 or 3 < density <= 4:\n                score += 15\n        \n        # 섹션 길이 준수\n        compliant_sections = sum(\n            1 for s in state.sections \n            if 300 <= len(s['draft_text']) <= 500\n        )\n        if state.sections:\n            score += (compliant_sections / len(state.sections)) * 20\n        \n        return min(100, score)\n    \n    def record_quality_scores(self, keyword: str, state: BlogState):\n        \"\"\"\n        품질 점수 계산 및 기록\n        \"\"\"\n        total_text = ' '.join([s['draft_text'] for s in state.sections])\n        \n        readability = self.calculate_readability_score(total_text)\n        seo = self.calculate_seo_score(state)\n        uniqueness = 95.0  # 플레이스홀더 - will be implemented in Phase 3\n        overall = (readability + seo + uniqueness) / 3\n        \n        cursor = self.metrics.db.cursor()\n        cursor.execute('''\n            INSERT INTO quality_scores\n            (keyword, readability_score, seo_score, uniqueness_score, overall_score)\n            VALUES (?, ?, ?, ?, ?)\n        ''', (keyword, readability, seo, uniqueness, overall))\n        self.metrics.db.commit()\n        \n        return {\n            'readability': readability,\n            'seo': seo,\n            'uniqueness': uniqueness,\n            'overall': overall\n        }\n\nclass PipelineLogger:\n    def __init__(self, name: str = \"blog_pipeline\"):\n        self.logger = self._setup_logger(name)\n        self.metrics_collector = MetricsCollector()\n        self.quality_monitor = QualityMonitor(self.metrics_collector)\n    \n    def _setup_logger(self, name: str) -> logging.Logger:\n        logger = logging.getLogger(name)\n        logger.setLevel(logging.INFO)\n        \n        # 회전 파일 핸들러\n        from logging.handlers import RotatingFileHandler\n        file_handler = RotatingFileHandler(\n            'blog_generation.log',\n            maxBytes=10*1024*1024,  # 10MB\n            backupCount=5\n        )\n        file_handler.setLevel(logging.INFO)\n        \n        # 색상이 있는 콘솔 핸들러\n        console_handler = logging.StreamHandler()\n        console_handler.setLevel(logging.INFO)\n        \n        # 포맷터\n        formatter = logging.Formatter(\n            '%(asctime)s - %(name)s - %(levelname)s - %(message)s',\n            datefmt='%Y-%m-%d %H:%M:%S'\n        )\n        file_handler.setFormatter(formatter)\n        console_handler.setFormatter(formatter)\n        \n        logger.addHandler(file_handler)\n        logger.addHandler(console_handler)\n        \n        return logger\n    \n    def log_generation_start(self, keyword: str):\n        self.logger.info(f\"=== 키워드 '{keyword}'에 대한 블로그 생성 시작 ===\")\n        self.metrics_collector.start_timer('total')\n    \n    def log_step_complete(self, step: str, details: Dict):\n        self.logger.info(f\"✓ {step} 완료: {json.dumps(details, ensure_ascii=False)}\")\n    \n    def log_generation_complete(self, state: BlogState, success: bool):\n        total_time = self.metrics_collector.end_timer('total')\n        \n        if success:\n            self.logger.info(f\"✓ 블로그 생성이 {total_time:.2f}초 만에 성공적으로 완료되었습니다\")\n            \n            # 품질 점수 계산 및 로그\n            quality_scores = self.quality_monitor.record_quality_scores(\n                state.keyword, state\n            )\n            self.logger.info(f\"품질 점수: {quality_scores}\")\n        else:\n            self.logger.error(f\"✗ {total_time:.2f}초 후 블로그 생성이 실패했습니다\")\n    \n    def get_dashboard_data(self) -> Dict:\n        \"\"\"모니터링 대시보드를 위한 데이터 가져오기\"\"\"\n        return {\n            'success_rate': self.metrics_collector.get_success_rate(),\n            'avg_generation_times': self.metrics_collector.get_average_generation_time(),\n            'error_distribution': self.metrics_collector.get_error_distribution(),\n            'recent_generations': self._get_recent_generations(10)\n        }\n    \n    def _get_recent_generations(self, limit: int) -> List[Dict]:\n        cursor = self.metrics_collector.db.cursor()\n        results = cursor.execute('''\n            SELECT keyword, total_time, success, timestamp\n            FROM generation_metrics\n            ORDER BY timestamp DESC\n            LIMIT ?\n        ''', (limit,)).fetchall()\n        \n        return [\n            {\n                'keyword': r[0],\n                'duration': r[1],\n                'success': bool(r[2]),\n                'timestamp': r[3]\n            }\n            for r in results\n        ]\n```",
+        "testStrategy": "1. 메트릭 수집 정확도 테스트\n2. 데이터베이스 지속성 확인\n3. 성공률 계산 테스트\n4. 품질 점수 알고리즘 검증\n5. 로그 회전 기능 확인\n6. 대시보드 데이터 생성 테스트",
+        "priority": "medium",
+        "dependencies": [
+          17,
+          18
+        ],
+        "status": "pending",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Configure Logging System",
+            "description": "Set up Python logging with appropriate loggers, handlers (console and rotating file), formatters, and log levels for the pipeline.",
+            "dependencies": [],
+            "details": "Implement logger initialization using logging.getLogger, configure RotatingFileHandler for file logs, StreamHandler for console, and set formatter for timestamped, readable output. Ensure log level is set to INFO or DEBUG as appropriate.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 2,
+            "title": "Design and Implement Metrics Collection Database",
+            "description": "Design and create the SQLite schema for storing generation metrics and quality scores, and implement methods for inserting and querying metrics.",
+            "dependencies": [
+              "19.1"
+            ],
+            "details": "Define tables for generation_metrics and quality_scores with appropriate fields. Implement database initialization, insertion, and query methods for metrics collection.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 3,
+            "title": "Implement Quality Score Calculation",
+            "description": "Develop algorithms to calculate readability, SEO, uniqueness, and overall quality scores for generated content.",
+            "dependencies": [
+              "19.2"
+            ],
+            "details": "Implement methods for readability scoring (sentence/word analysis), SEO scoring (keyword density, title compliance, section structure), and placeholder for uniqueness. Store results in the quality_scores table.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 4,
+            "title": "Aggregate Success Rate and Error Distribution",
+            "description": "Implement logic to compute pipeline success rates and error type distributions over configurable time windows.",
+            "dependencies": [
+              "19.2"
+            ],
+            "details": "Query the metrics database to calculate the percentage of successful generations and count occurrences of each error type for reporting and monitoring.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 5,
+            "title": "Generate Dashboard Monitoring Data",
+            "description": "Develop methods to aggregate and provide dashboard-ready data including recent generations, average times, success rates, and error distributions.",
+            "dependencies": [
+              "19.3",
+              "19.4"
+            ],
+            "details": "Implement a function to return a dictionary with all key monitoring metrics for use in a dashboard or monitoring UI.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 6,
+            "title": "Implement Log Rotation and Retention Policy",
+            "description": "Configure log rotation using RotatingFileHandler and set up retention policies to manage log file size and backups.",
+            "dependencies": [
+              "19.1"
+            ],
+            "details": "Set maxBytes and backupCount for RotatingFileHandler to ensure logs are rotated and old logs are deleted or archived according to policy.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 7,
+            "title": "Develop and Execute Test Cases for Logging and Monitoring",
+            "description": "Write and run unit and integration tests to verify logging, metrics collection, quality scoring, aggregation, and dashboard data generation.",
+            "dependencies": [
+              "19.1",
+              "19.2",
+              "19.3",
+              "19.4",
+              "19.5",
+              "19.6"
+            ],
+            "details": "Create tests to validate metric accuracy, database persistence, success rate calculations, quality score algorithms, log rotation, and dashboard data integrity.",
+            "status": "pending",
+            "testStrategy": ""
+          }
+        ]
+      },
+      {
+        "id": 20,
+        "title": "테스트 스위트 및 품질 보증 개발",
+        "description": "MVP가 모든 지정된 요구 사항과 품질 표준을 충족하도록 보장하기 위해 단위 테스트, 통합 테스트 및 품질 검증을 포함한 포괄적인 테스트 스위트를 생성합니다",
+        "details": "```python\nimport unittest\nimport pytest\nfrom unittest.mock import Mock, patch, MagicMock\nimport json\nimport tempfile\nimport os\nfrom typing import Dict, List\n\n# 단위 테스트\nclass TestTitleGenerator(unittest.TestCase):\n    def setUp(self):\n        self.mock_llm = Mock()\n        self.title_generator = TitleGenerator(self.mock_llm)\n    \n    def test_title_generation_success(self):\n        # LLM 응답 모킹\n        self.mock_llm.predict.return_value = \"파이썬 프로그래밍 완벽 가이드: 초보자를 위한 필수 팁 10가지\"\n        \n        title = self.title_generator.generate_title(\"파이썬 프로그래밍\")\n        \n        self.assertIn(\"파이썬 프로그래밍\", title)\n        self.assertTrue(50 <= len(title) <= 60)\n    \n    def test_title_validation(self):\n        valid_title = \"파이썬 프로그래밍 완벽 가이드: 초보자를 위한 필수 팁\"\n        invalid_title_short = \"파이썬 가이드\"\n        invalid_title_no_keyword = \"프로그래밍 완벽 가이드\"\n        \n        self.assertTrue(\n            self.title_generator._validate_title(valid_title, \"파이썬\")\n        )\n        self.assertFalse(\n            self.title_generator._validate_title(invalid_title_short, \"파이썬\")\n        )\n        self.assertFalse(\n            self.title_generator._validate_title(invalid_title_no_keyword, \"파이썬\")\n        )\n    \n    def test_fallback_title(self):\n        # LLM이 항상 검증 실패하도록 모킹\n        self.mock_llm.predict.return_value = \"짧은 제목\"\n        \n        title = self.title_generator.generate_title(\"테스트 키워드\")\n        \n        self.assertEqual(title, \"테스트 키워드 완벽 가이드: 알아야 할 모든 것\")\n\nclass TestOutlineGenerator(unittest.TestCase):\n    def setUp(self):\n        self.mock_llm = Mock()\n        self.outline_generator = OutlineGenerator(self.mock_llm)\n    \n    def test_outline_structure(self):\n        # 유효한 JSON 응답 모킹\n        mock_outline = {\n            \"sections\": [\n                {\"h2\": \"소개\", \"h3\": [], \"h4_map\": {}},\n                {\"h2\": \"기본 개념\", \"h3\": [\"변수\", \"함수\"], \"h4_map\": {}},\n                {\"h2\": \"고급 기능\", \"h3\": [\"클래스\", \"모듈\"], \"h4_map\": {}},\n                {\"h2\": \"실전 예제\", \"h3\": [], \"h4_map\": {}},\n                {\"h2\": \"결론\", \"h3\": [], \"h4_map\": {}}\n            ]\n        }\n        \n        self.mock_llm.predict.return_value = json.dumps(mock_outline)\n        \n        outline = self.outline_generator.generate_outline(\n            \"파이썬 완벽 가이드\", \"파이썬\"\n        )\n        \n        self.assertEqual(len(outline.sections), 5)\n        self.assertTrue(5 <= len(outline.sections) <= 7)\n        self.assertEqual(outline.sections[1].h3, [\"변수\", \"함수\"])\n    \n    def test_outline_fallback(self):\n        # 무효한 JSON 모킹\n        self.mock_llm.predict.return_value = \"invalid json\"\n        \n        outline = self.outline_generator.generate_outline(\n            \"테스트 제목\", \"테스트\"\n        )\n        \n        self.assertEqual(len(outline.sections), 5)\n        self.assertIn(\"테스트\", outline.sections[0].h2)\n\nclass TestSectionGenerator(unittest.TestCase):\n    def setUp(self):\n        self.mock_llm = Mock()\n        self.section_generator = SectionGenerator(self.mock_llm)\n    \n    def test_section_generation(self):\n        # LLM 응답 모킹\n        self.mock_llm.predict.side_effect = [\n            \"이것은 테스트 섹션의 내용입니다. \" * 20,  # 메인 콘텐츠\n            \"섹션 요약 라인 1\\n섹션 요약 라인 2\\n섹션 요약 라인 3\"  # 요약\n        ]\n        \n        section = self.section_generator.generate_section(\n            \"테스트 제목\",\n            \"테스트 섹션\",\n            [\"서브1\", \"서브2\"],\n            0\n        )\n        \n        self.assertIn(\"h2_id\", section)\n        self.assertIn(\"draft_text\", section)\n        self.assertIn(\"summary_3lines\", section)\n        self.assertIn(\"facts\", section)\n        self.assertTrue(300 <= len(section[\"draft_text\"]) <= 500)\n    \n    def test_memory_persistence(self):\n        # 여러 섹션 생성\n        self.mock_llm.predict.return_value = \"섹션 내용\" * 50\n        \n        for i in range(3):\n            self.section_generator.generate_section(\n                \"테스트\", f\"섹션{i}\", [], i\n            )\n        \n        # 메모리 축적 확인\n        self.assertEqual(len(self.section_generator.section_summaries), 3)\n        self.assertTrue(len(self.section_generator.facts) >= 0)\n\n# 통합 테스트\nclass TestPipelineIntegration(unittest.TestCase):\n    def setUp(self):\n        self.temp_db = tempfile.NamedTemporaryFile(delete=False)\n        self.config = {\n            'llm': {'provider': 'openai', 'model': 'gpt-4'},\n            'wordpress': {\n                'url': 'https://test.com',\n                'username': 'test',\n                'password': 'test'\n            }\n        }\n    \n    def tearDown(self):\n        os.unlink(self.temp_db.name)\n    \n    @patch('openai.ChatCompletion.create')\n    @patch('requests.Session.post')\n    def test_full_pipeline_execution(self, mock_wp_post, mock_openai):\n        # OpenAI 응답 모킹\n        mock_openai.return_value = MagicMock(\n            choices=[MagicMock(message=MagicMock(content=\"모킹된 응답\"))]\n        )\n        \n        # WordPress 응답 모킹\n        mock_wp_post.return_value = MagicMock(\n            status_code=201,\n            json=lambda: {'id': 123, 'link': 'https://test.com/post-123'}\n        )\n        \n        pipeline = BlogGenerationPipeline(self.config)\n        result = pipeline.generate_blog(\"테스트 키워드\")\n        \n        self.assertTrue(result['success'])\n        self.assertIn('state', result)\n        self.assertIn('html', result)\n        self.assertIn('metrics', result)\n\n# 품질 검증 테스트\nclass TestQualityValidation(unittest.TestCase):\n    def test_html_structure_validation(self):\n        assembler = HTMLAssembler()\n        \n        # 테스트 상태 생성\n        state = BlogState(\n            keyword=\"테스트\",\n            title=\"테스트 제목\",\n            outline=BlogOutline(sections=[\n                BlogSection(h2=\"섹션1\", h3=[]),\n                BlogSection(h2=\"섹션2\", h3=[\"서브1\", \"서브2\"])\n            ]),\n            sections=[\n                {\n                    \"h2_id\": \"section-1\",\n                    \"draft_text\": \"섹션 1 내용\",\n                    \"summary_3lines\": \"요약\",\n                    \"facts\": []\n                },\n                {\n                    \"h2_id\": \"section-2\",\n                    \"draft_text\": \"섹션 2 내용\",\n                    \"summary_3lines\": \"요약\",\n                    \"facts\": []\n                }\n            ]\n        )\n        \n        html = assembler.assemble_html(state)\n        \n        # 필수 CSS 클래스 검증\n        self.assertIn('class=\"fs-article\"', html)\n        self.assertIn('class=\"fs-title\"', html)\n        self.assertIn('class=\"fs-toc\"', html)\n        self.assertIn('class=\"fs-section\"', html)\n        \n        # HTML 구조 검증\n        from html.parser import HTMLParser\n        parser = HTMLParser()\n        parser.feed(html)  # 예외가 발생하지 않아야 함\n    \n    def test_seo_compliance(self):\n        monitor = QualityMonitor(MetricsCollector(\":memory:\"))\n        \n        state = BlogState(\n            keyword=\"파이썬\",\n            title=\"파이썬 프로그래밍 완벽 가이드: 초보자를 위한 필수 팁\",\n            outline=BlogOutline(sections=[\n                BlogSection(h2=f\"섹션{i}\", h3=[]) for i in range(6)\n            ]),\n            sections=[\n                {\n                    \"h2_id\": f\"section-{i}\",\n                    \"draft_text\": \"파이썬은 강력한 프로그래밍 언어입니다. \" * 25,\n                    \"summary_3lines\": \"요약\",\n                    \"facts\": []\n                }\n                for i in range(6)\n            ]\n        )\n        \n        seo_score = monitor.calculate_seo_score(state)\n        \n        self.assertGreater(seo_score, 70)  # 좋은 SEO 점수를 가져야 함\n\n# 성능 테스트\nclass TestPerformance(unittest.TestCase):\n    @pytest.mark.timeout(180)  # 3분 타임아웃\n    def test_generation_time_limit(self):\n        \"\"\"전체 생성이 3분 이내에 완료되는지 테스트\"\"\"\n        import time\n        start_time = time.time()\n        \n        # 빠른 응답 모킹\n        with patch('openai.ChatCompletion.create') as mock_openai:\n            mock_openai.return_value = MagicMock(\n                choices=[MagicMock(message=MagicMock(content=\"빠른 응답\"))]\n            )\n            \n            pipeline = BlogGenerationPipeline(self.config)\n            result = pipeline.generate_blog(\"테스트\")\n        \n        duration = time.time() - start_time\n        self.assertLess(duration, 180)  # 3분 미만\n\n# 테스트 러너\ndef run_all_tests():\n    \"\"\"모든 테스트 스위트 실행 및 보고서 생성\"\"\"\n    # 테스트 스위트 생성\n    test_suite = unittest.TestSuite()\n    \n    # 모든 테스트 클래스 추가\n    test_classes = [\n        TestTitleGenerator,\n        TestOutlineGenerator,\n        TestSectionGenerator,\n        TestPipelineIntegration,\n        TestQualityValidation,\n        TestPerformance\n    ]\n    \n    for test_class in test_classes:\n        tests = unittest.TestLoader().loadTestsFromTestCase(test_class)\n        test_suite.addTests(tests)\n    \n    # 자세한 출력으로 테스트 실행\n    runner = unittest.TextTestRunner(verbosity=2)\n    result = runner.run(test_suite)\n    \n    # 테스트 보고서 생성\n    report = {\n        'total_tests': result.testsRun,\n        'failures': len(result.failures),\n        'errors': len(result.errors),\n        'success_rate': ((result.testsRun - len(result.failures) - len(result.errors)) \n                        / result.testsRun * 100) if result.testsRun > 0 else 0\n    }\n    \n    print(f\"\\n=== 테스트 보고서 ===\")\n    print(f\"전체 테스트: {report['total_tests']}\")\n    print(f\"통과: {report['total_tests'] - report['failures'] - report['errors']}\")\n    print(f\"실패: {report['failures']}\")\n    print(f\"오류: {report['errors']}\")\n    print(f\"성공률: {report['success_rate']:.1f}%\")\n    \n    return report\n\n# 품질 게이트 확인\nclass QualityGate:\n    @staticmethod\n    def check_mvp_requirements() -> Dict[str, bool]:\n        \"\"\"모든 MVP 요구 사항이 충족되는지 확인\"\"\"\n        checks = {\n            'title_generation_success_rate': True,  # >95%\n            'outline_json_validity': True,  # 100%\n            'section_length_compliance': True,  # >90%\n            'html_structure_validity': True,  # 100%\n            'wordpress_upload_success': True,  # >95%\n            'generation_time_limit': True  # <3분\n        }\n        \n        # 여기서 실제 확인 실행\n        # ...\n        \n        return checks\n\nif __name__ == \"__main__\":\n    run_all_tests()\n```",
+        "testStrategy": "1. 개별 모듈의 모든 단위 테스트 실행\n2. 파이프라인 흐름의 통합 테스트 실행\n3. HTML 출력 구조 검증\n4. SEO 준수 점수 확인\n5. 성능 요구 사항 확인 (<3분)\n6. 모든 MVP 품질 게이트 통과 보장",
+        "priority": "medium",
+        "dependencies": [
+          17,
+          18,
+          19
+        ],
+        "status": "pending",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Unit Test Development",
+            "description": "Design and implement unit tests for all core modules (e.g., title, outline, section generators) to verify correctness of individual components.",
+            "dependencies": [],
+            "details": "Write comprehensive unit tests using unittest and pytest for each module, ensuring coverage of normal, edge, and failure cases. Mock external dependencies as needed.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 2,
+            "title": "Integration Test Development",
+            "description": "Develop integration tests to validate the end-to-end workflow of the blog generation pipeline, including interactions between modules and external services.",
+            "dependencies": [
+              "20.1"
+            ],
+            "details": "Simulate real pipeline execution with mocked LLM and WordPress APIs, verifying that data flows correctly and all steps complete as expected.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 3,
+            "title": "Quality Validation Test Implementation",
+            "description": "Implement tests to verify output quality, including HTML structure validation, SEO compliance, and adherence to content standards.",
+            "dependencies": [
+              "20.1"
+            ],
+            "details": "Check for required HTML classes, valid structure, and SEO score thresholds. Ensure outputs meet all specified quality gates.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 4,
+            "title": "Performance Test Implementation",
+            "description": "Create performance tests to ensure the entire generation process completes within the required time limits and resource constraints.",
+            "dependencies": [
+              "20.2"
+            ],
+            "details": "Measure total execution time for blog generation and assert completion within 3 minutes. Profile resource usage if necessary.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 5,
+            "title": "Test Runner and Reporting Setup",
+            "description": "Develop a unified test runner that executes all test suites and generates detailed reports on test outcomes and coverage.",
+            "dependencies": [
+              "20.1",
+              "20.2",
+              "20.3",
+              "20.4"
+            ],
+            "details": "Aggregate results from all test classes, output summary statistics, and provide actionable feedback for failures and errors.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 6,
+            "title": "Quality Gate Implementation",
+            "description": "Implement automated quality gates that check all MVP requirements and block releases if any critical criteria are not met.",
+            "dependencies": [
+              "20.5"
+            ],
+            "details": "Automate checks for title success rate, JSON validity, section length, HTML structure, upload success, and performance metrics.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 7,
+            "title": "Continuous Integration (CI) Integration",
+            "description": "Integrate the test suite with a CI pipeline to ensure automated execution and enforcement of quality gates on every commit or pull request.",
+            "dependencies": [
+              "20.6"
+            ],
+            "details": "Configure CI tools (e.g., GitHub Actions) to run all tests, collect coverage, and fail builds if any test or quality gate fails.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 8,
+            "title": "Test Data and Mocking Strategy Design",
+            "description": "Design robust test data sets and mocking strategies to ensure reliable, repeatable, and isolated test execution across all test types.",
+            "dependencies": [
+              "20.1",
+              "20.2",
+              "20.3",
+              "20.4"
+            ],
+            "details": "Define representative input data, mock LLM and external APIs, and ensure all tests are deterministic and independent of external state.",
+            "status": "pending",
+            "testStrategy": ""
+          }
+        ]
+      }
+    ],
+    "metadata": {
+      "created": "2025-08-22T09:53:37.667Z",
+      "updated": "2025-08-22T11:49:49.509Z",
+      "description": "master 컨텍스트를 위한 작업들"
+    }
+  }
+}

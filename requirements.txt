@@ -1,0 +1,45 @@
+# SEO 블로그 자동 생성 시스템 의존성
+# v1.0 - 기본 환경 설정 (2025.08.22)
+
+# 핵심 LangChain 및 LLM 라이브러리
+langchain==0.2.*
+langchain-openai
+langchain-anthropic
+langchain-core
+langchain-text-splitters
+
+# LLM API 클라이언트
+openai>=1.0.0
+anthropic>=0.64.0
+
+# 데이터 검증 및 직렬화
+pydantic>=2.0.0
+
+# 환경 변수 관리
+python-dotenv
+
+# 웹 요청 (WordPress API용)
+requests>=2.25.0
+
+# 데이터베이스 (SQLite 지원)
+sqlalchemy>=2.0.0
+
+# HTML 파싱 및 처리 (향후 크롤링용)
+beautifulsoup4
+lxml
+
+# 로깅 및 유틸리티
+colorlog  # 컬러 로깅
+tqdm     # 진행률 표시
+
+# 개발 및 테스트
+pytest>=7.0.0
+pytest-asyncio
+pytest-mock
+black    # 코드 포매팅
+isort    # import 정렬
+flake8   # 린터
+
+# 문서화
+mkdocs
+mkdocs-material 
