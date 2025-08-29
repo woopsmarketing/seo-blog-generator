@@ -17,6 +17,7 @@ from src.models.blog_models import BlogOutline, BlogSection
 from src.generators.content.memory import DocumentMemoryManager, FactTracker
 from src.utils.config import load_config
 from src.utils.llm_factory import LLMFactory, LLMConfig
+from src.utils.rag import SimpleRAG
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,7 @@ class SectionGenerator:
         self,
         config: Optional[Dict] = None,
         memory_save_path: Optional[str] = None,
+        rag: Optional[SimpleRAG] = None,
     ):
         """
         섹션 생성기 초기화
@@ -40,10 +42,12 @@ class SectionGenerator:
         Args:
             config: LLM 설정 (기본값: None, 자동 로드)
             memory_save_path: 메모리 저장 경로 (선택사항)
+            rag: 선택적 RAG 주입 객체
         """
         self.config = config or load_config()
         self.llm = None
         self.memory_save_path = memory_save_path
+        self.rag = rag
 
         # LLM 설정 먼저 생성
         self.llm_config = LLMConfig(
@@ -141,6 +145,13 @@ class SectionGenerator:
             prompt = self._create_section_generation_prompt(
                 section, section_index, combined_context
             )
+
+            # RAG 주입: rag가 있다면 관련 컨텍스트를 앞단에 추가
+            if self.rag:
+                rag_query = f"{combined_context.get('document_title','')} - {section_title} 핵심 내용 요약"
+                rag_context = self.rag.query(rag_query)
+                if rag_context:
+                    prompt = f"{rag_context}\n\n---\n\n{prompt}"
 
             # LLM으로 콘텐츠 생성
             message = HumanMessage(content=prompt)
@@ -247,8 +258,8 @@ class SectionGenerator:
                 section_index=i,
                 context={
                     "document_title": outline.title,
-                    "target_keyword": outline.keyword,
-                    "target_audience": outline.target_audience,
+                    "target_keyword": outline.meta.target_keyword,
+                    "target_audience": "general",
                 },
                 options=options,
             )
@@ -303,28 +314,34 @@ class SectionGenerator:
         context: Dict[str, Any],
         next_section: BlogSection = None,
     ) -> str:
-        """섹션 타입별 세부 프롬프트 생성 - 개선된 콘텐츠 플로우와 길이 조절"""
+        """섹션 타입별 세부 프롬프트 생성 - GPT-5-nano 최적화 및 자연스러운 콘텐츠 플로우"""
 
         # 키워드 전략 정보 추출
         keyword_strategy = context.get("keyword_strategy")
-        
+
         # 전체 섹션 수를 기반으로 한 최적 길이 계산
         total_sections = len(context.get("all_sections", []))
         total_target_length = 4500  # 4000-6000 범위의 중간값
-        
+
         # 섹션별 권장 길이 계산 (첫 섹션은 짧게, 나머지는 균등 분배)
         if section_index == 1:  # 개요 섹션
             target_length = "400-500자"
             per_section_target = 400
-        elif section_index == total_sections and "FAQ" in section.h2.upper():  # 마지막 FAQ 섹션
+        elif (
+            section_index == total_sections and "FAQ" in section.h2.upper()
+        ):  # 마지막 FAQ 섹션
             target_length = "300-400자"
             per_section_target = 350
         else:  # 일반 섹션들
-            remaining_length = total_target_length - 400 - (350 if total_sections > 2 else 0)
-            remaining_sections = max(1, total_sections - (2 if total_sections > 2 else 1))
+            remaining_length = (
+                total_target_length - 400 - (350 if total_sections > 2 else 0)
+            )
+            remaining_sections = max(
+                1, total_sections - (2 if total_sections > 2 else 1)
+            )
             per_section_target = remaining_length // remaining_sections
             target_length = f"{per_section_target-50}-{per_section_target+100}자"
-        
+
         is_overview_section = section_index == 1
 
         # 키워드 전략 정보 구성
@@ -409,11 +426,10 @@ class SectionGenerator:
 
 **섹션 정보:**
 - 섹션 제목: {section.h2}
-- 목표 길이: {target_length} (전체 문서 4000-6000자 목표의 일부)
+- 목표 길이: {target_length}
 - 하위 섹션: {section.h3 if section.h3 else '없음'}
 - 문서 제목: {context['document_title']}
-- 타겟 독자: {context.get('target_audience', '일반 독자')}
-- 섹션 순서: {section_index}/{len(context.get('all_sections', []))} (각 섹션이 개별 LLM 호출로 생성됨)
+- 타겟 키워드: {context['target_keyword']}
 
 {keyword_info}
 
@@ -421,43 +437,43 @@ class SectionGenerator:
 
 {next_section_hint}
 
-**⚠️ 중요: 길이 준수 지침**
-- 목표 길이 {target_length}를 정확히 준수하세요
-- 글자 수가 부족하거나 과도하게 초과하지 마세요
-- 각 문단은 3-5문장으로 구성하세요
-- 전체 문서의 균형을 위해 개별 섹션 길이가 중요합니다
+**🚨 중요 - 출력 형식:**
+- 절대로 "섹션:", "제목:", "내용:" 같은 메타 정보를 출력하지 마세요
+- 섹션 제목 {section.h2}을 다시 출력하지 마세요 (별도 처리됨)
+- 바로 본문 내용부터 시작하세요
+- H3 하위 섹션이 있는 경우: ### 하위섹션제목 형태로 작성
 
 **작성 가이드라인:**
-1. 타겟 키워드 '{context['target_keyword']}'를 자연스럽게 포함 (과도한 반복 금지)
-2. {'간결하고 핵심적인 소개로 독자의 관심을 끌어내세요' if is_overview_section else '구체적이고 실용적인 정보를 체계적으로 제공하세요'}
-3. 독자가 즉시 적용할 수 있는 실질적인 내용 중심
-4. 전문 용어 사용 시 간단한 설명 포함
-5. 문서 전체의 일관성과 연속성 유지
-6. **절대 금지**: 결론형 표현들
-   - "마지막으로", "이것으로", "결론적으로", "정리하자면", "마무리하면"
-   - "총정리하면", "요약하면", "종합하면", "전체적으로", "이상으로"
-   - "이로써", "따라서 우리는", "결과적으로"
+1. 목표 길이 {target_length}를 정확히 준수
+2. 키워드 '{context['target_keyword']}'를 자연스럽게 포함 (과도한 반복 금지)
+3. {'간결하고 핵심적인 소개로 독자 관심 유도' if is_overview_section else '구체적이고 실용적인 정보 제공'}
+4. 독자가 바로 활용할 수 있는 실질적 내용 중심
+5. 전문 용어 사용 시 간단한 설명 포함
 
-**📝 섹션별 특화 지침:**
-{'**개요 섹션**: 핵심 개념을 간단히 소개하고 독자의 호기심을 자극하여 계속 읽고 싶게 만드세요. 전체적인 방향성을 제시하되 구체적인 내용은 다음 섹션에 맡기세요.' if is_overview_section else ('**FAQ 섹션**: Q: 질문, A: 답변 형식으로 작성하세요. 각 Q&A는 2-3문장으로 간결하게, 독자가 실제로 궁금해할 만한 내용만 포함하세요.' if 'FAQ' in section.h2.upper() else '**본문 섹션**: 상세하고 실용적인 정보를 체계적으로 제공하세요. 구체적인 예시, 실행 방법, 단계별 설명을 포함하여 독자가 바로 적용할 수 있도록 하세요.')}
+**절대 금지 사항:**
+- 섹션 메타정보 출력: "섹션: XXX", "제목: XXX", "내용: XXX"
+- 섹션 제목 재출력: "{section.h2}" 다시 쓰지 마세요
+- 결론형 표현: "마지막으로", "결론적으로", "정리하자면", "요약하면"
+- 명시적 참조: "앞에서 말한", "이전 섹션에서", "위에서 언급한"
 
-**🔗 섹션 간 연결성:**
-- 이전 섹션의 내용을 자연스럽게 이어받되, 명시적 참조("앞에서 말한")는 피하세요
-- {'다음 섹션으로 자연스럽게 연결되도록 마지막 문단을 작성하세요' if next_section else '전체 내용을 자연스럽게 마무리하세요'}
-- 각 섹션은 독립적으로 읽어도 이해가 가능해야 합니다
+**섹션별 특화 지침:**
+{'개요 섹션: 핵심 개념 간단 소개, 독자 호기심 자극' if is_overview_section else ('FAQ 섹션: Q: 질문, A: 답변 형식, 각 Q&A는 2-3문장' if 'FAQ' in section.h2.upper() else '본문 섹션: 상세 정보, 구체적 예시, 단계별 설명')}
 
-**출력 형식:**
-- H3 하위 섹션이 있는 경우: ### 하위섹션제목 형태로 마크다운 구조 사용
-- 본문은 자연스러운 단락으로 구성 (각 단락 3-5문장)
-- 섹션 제목(H2)은 포함하지 마세요 (별도로 추가됩니다)
-- 목표 길이를 정확히 준수하여 작성하세요
+**연결성:**
+- 이전 내용을 자연스럽게 이어받되 명시적 참조는 피하세요
+- {'마지막 문단에 다음 섹션 연결 문구 포함' if next_section else '자연스럽게 마무리'}
 
-**✅ 최종 체크리스트:**
-□ 목표 길이 {target_length} 준수
-□ 키워드 자연스럽게 포함
-□ 다음 섹션 연결 문구 포함 (마지막 섹션 제외)
-□ 결론형 표현 없음
-□ 실질적이고 유용한 내용
+**출력 예시:**
+```
+### 하위섹션제목 (있는 경우만)
+본문 내용이 바로 시작됩니다. 섹션 제목이나 메타 정보는 절대 출력하지 않습니다.
+
+각 문단은 3-5문장으로 구성하며, 독자에게 유용한 정보를 제공합니다.
+
+{'다음으로는 ' + next_section.h2.lower() + '에 대해 알아보겠습니다.' if next_section else ''}
+```
+
+**핵심: 바로 본문 내용부터 출력하고, 어떤 메타 정보도 포함하지 마세요!**
 """
         return prompt
 

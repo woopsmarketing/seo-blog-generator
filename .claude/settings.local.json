@@ -1,9 +1,4 @@
 {
-  "env": {
-    "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "8000",
-    "DISABLE_NON_ESSENTIAL_MODEL_CALLS": "1",
-    "DISABLE_COST_WARNINGS": "1"
-  },
   "permissions": {
     "allow": [
       "Bash(where claude)",
@@ -14,7 +9,12 @@
       "WebFetch(domain:platform.openai.com)",
       "WebSearch",
       "Bash(git config:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(git checkout:*)",
+      "Bash(pip install:*)",
+      "Bash(git remote add:*)"
     ]
   },
   "enabledMcpjsonServers": [

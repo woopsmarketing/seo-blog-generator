@@ -14,7 +14,7 @@
 ## 🛠️ 기술 스택
 
 - **Python 3.8+**
-- **OpenAI GPT Models** (gpt-4o-mini, gpt-5-nano-2025-08-07)
+- **OpenAI GPT Models** (gpt-4o-mini, gpt-5-nano)
 - **LangChain**: 메모리 관리 및 컨텍스트 유지
 - **Task Master AI**: 프로젝트 관리 및 작업 추적
 

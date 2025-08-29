@@ -1,5 +1,23 @@
 {
   "mcpServers": {
+    "github": {
+      "command": "cmd",
+      "args": [
+        "/c",
+        "npx",
+        "-y",
+        "@smithery/cli@latest",
+        "run",
+        "@smithery-ai/github",
+        "--key",
+        "1eceb3d3-6684-4a76-873a-a96c251a7330",
+        "--profile",
+        "complex-rattlesnake-vAgAv1"
+      ],
+      "env": {
+        "GITHUB_TOKEN": "${GITHUB_TOKEN}"
+      }
+    },
     "task-master-ai": {
 			"command": "npx",
 			"args": ["-y", "--package=task-master-ai", "task-master-ai"],

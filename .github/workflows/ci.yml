@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest flake8 black isort
+    
+    - name: Lint with flake8
+      run: |
+        flake8 src/ tests/ --count --select=E9,F63,F7,F82 --show-source --statistics
+        flake8 src/ tests/ --count --exit-zero --max-complexity=10 --max-line-length=88 --statistics
+    
+    - name: Check formatting with black
+      run: black --check src/ tests/
+    
+    - name: Check import sorting with isort
+      run: isort --check-only src/ tests/
+    
+    - name: Run tests
+      run: pytest tests/ -v --tb=short
+
+  frontend:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: |
+        if [ -f package.json ]; then
+          npm ci
+        else
+          echo "No package.json found, skipping frontend checks"
+          exit 0
+        fi
+    
+    - name: Lint
+      run: |
+        if [ -f package.json ]; then
+          npm run lint || echo "No lint script found"
+        fi
+    
+    - name: Test
+      run: |
+        if [ -f package.json ]; then
+          npm test || echo "No test script found"
+        fi
+    
+    - name: Build
+      run: |
+        if [ -f package.json ]; then
+          npm run build || echo "No build script found"
+        fi
+
+  security:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Run security checks
+      run: |
+        echo "Checking for secrets in codebase..."
+        if grep -r "sk-" . --exclude-dir=.git --exclude-dir=.github --exclude="*.md"; then
+          echo "⚠️ Potential API keys found in codebase"
+          exit 1
+        fi
+        if grep -r "pplx-" . --exclude-dir=.git --exclude-dir=.github --exclude="*.md"; then
+          echo "⚠️ Potential API keys found in codebase"
+          exit 1
+        fi
+        echo "✅ No API keys found in codebase"

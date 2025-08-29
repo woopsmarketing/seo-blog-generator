@@ -30,10 +30,10 @@ def load_config() -> Dict[str, Any]:
                 "DEFAULT_LLM_PROVIDER", "openai"
             ),  # openai 또는 anthropic
             "openai_model": os.getenv(
-                "OPENAI_MODEL", "gpt-5-nano-2025-08-07"
-            ),  # GPT-5 nano 2025-08-07 사용 (가장 경제적이고 빠른 GPT-5 모델)
+                "OPENAI_MODEL", "gpt-5-nano"
+            ),  # GPT-5 nano 공식 모델명 사용 (가장 경제적이고 빠른 GPT-5 모델)
             "anthropic_model": os.getenv("ANTHROPIC_MODEL", "claude-3-sonnet-20240229"),
-            "temperature": float(os.getenv("LLM_TEMPERATURE", "0.7")),
+            "temperature": float(os.getenv("LLM_TEMPERATURE", "1.0")),
             "max_tokens": int(os.getenv("LLM_MAX_TOKENS", "2000")),
         },
         # WordPress 설정

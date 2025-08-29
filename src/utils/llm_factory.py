@@ -48,18 +48,21 @@ class LLMFactory:
         if not api_key:
             raise ValueError("OpenAI API 키가 설정되지 않았습니다")
 
-        # GPT-5 Nano는 temperature 고정 (1.0)이므로 기본값 사용
-        llm_params = {
-            "model_name": config.model,
-            "openai_api_key": api_key,
-            "max_tokens": config.max_tokens,
-        }
+        is_gpt5_series = config.model.startswith("gpt-5")
 
-        # GPT-5 Nano는 temperature 설정 불가능하므로 제거
-        if not config.model.startswith("gpt-5"):
-            llm_params["temperature"] = config.temperature
-
-        return ChatOpenAI(**llm_params)
+        if is_gpt5_series:
+            # GPT-5 계열: temperature=1.0만 허용, max_tokens는 지정하지 않음
+            llm = ChatOpenAI(model=config.model, api_key=api_key, temperature=1.0)
+            return llm
+        else:
+            # 기타 모델: 사용자 설정 전달
+            llm = ChatOpenAI(
+                model=config.model,
+                api_key=api_key,
+                temperature=config.temperature,
+                max_tokens=config.max_tokens,
+            )
+            return llm
 
     def create_anthropic_llm(self, config: LLMConfig) -> ChatAnthropic:
         """
@@ -234,7 +237,7 @@ def create_gpt5_nano(
     config = LLMConfig(
         provider="openai",
         model="gpt-5-nano",
-        temperature=1.0,  # GPT-5 Nano는 temperature 고정
+        temperature=1.0,  # GPT-5 계열은 temperature=1.0만 허용
         max_tokens=max_tokens,
         api_key=api_key,
     )
@@ -249,7 +252,7 @@ def create_gpt5_mini(
     config = LLMConfig(
         provider="openai",
         model="gpt-5-mini",
-        temperature=1.0,  # GPT-5 시리즈는 temperature 고정
+        temperature=1.0,  # GPT-5 계열은 temperature=1.0만 허용
         max_tokens=max_tokens,
         api_key=api_key,
     )
@@ -262,7 +265,7 @@ def create_gpt5(api_key: Optional[str] = None, max_tokens: int = 2000) -> ChatOp
     config = LLMConfig(
         provider="openai",
         model="gpt-5",
-        temperature=1.0,  # GPT-5 시리즈는 temperature 고정
+        temperature=1.0,  # GPT-5 계열은 temperature=1.0만 허용
         max_tokens=max_tokens,
         api_key=api_key,
     )
