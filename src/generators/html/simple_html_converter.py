@@ -37,6 +37,10 @@ class SimpleHTMLConverter:
             "content_paragraph": "blog-content",  # 일반 문단
             "content_list": "blog-list",  # 목록 컨테이너
             "content_list_item": "blog-list-item",  # 목록 항목
+            # 표 관련
+            "table": "blog-table",  # 표 컨테이너
+            "table_header": "blog-table-header",  # 표 헤더
+            "table_cell": "blog-table-cell",  # 표 셀
             # 특수 섹션
             "faq_section": "blog-faq",  # FAQ 섹션
             "intro_section": "blog-intro",  # 개요 섹션
@@ -65,10 +69,13 @@ class SimpleHTMLConverter:
         # 4. 텍스트 스타일 변환 (볼드, 이탤릭)
         html = self._convert_text_styles(html)
 
-        # 5. 목록 변환
+        # 5. 표 변환
+        html = self._convert_tables(html)
+
+        # 6. 목록 변환
         html = self._convert_lists(html)
 
-        # 6. 문단 변환
+        # 7. 문단 변환
         html = self._convert_paragraphs(html)
 
         # 7. 특수 섹션 클래스 적용
@@ -105,11 +112,11 @@ class SimpleHTMLConverter:
     def _remove_metadata_section(self, content: str) -> str:
         """마크다운 시작 부분의 H1 제목과 메타데이터 섹션 제거 (워드프레스에서 별도 처리)"""
         # H1 제목 제거 (워드프레스에서 title로 사용)
-        content = re.sub(r'^# .+?\n\n', '', content, flags=re.MULTILINE)
-        
+        content = re.sub(r"^# .+?\n\n", "", content, flags=re.MULTILINE)
+
         # 메타데이터 패턴 제거: **키워드:** 값
-        content = re.sub(r'(\*\*[^:]+:[^\n]+\n)+\n', '', content, flags=re.MULTILINE)
-        
+        content = re.sub(r"(\*\*[^:]+:[^\n]+\n)+\n", "", content, flags=re.MULTILINE)
+
         return content
 
     def _convert_headings(self, content: str) -> str:
@@ -143,13 +150,88 @@ class SimpleHTMLConverter:
     def _convert_text_styles(self, content: str) -> str:
         """볼드 및 이탤릭 텍스트 변환"""
         # 볼드 텍스트 변환 (**text** -> <strong>text</strong>)
-        content = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', content)
-        
+        content = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", content)
+
         # 이탤릭 텍스트 변환 (*text* -> <em>text</em>)
         # 단, 이미 <strong> 태그 안에 있지 않은 경우에만
-        content = re.sub(r'(?<!\*)\*([^*]+?)\*(?!\*)', r'<em>\1</em>', content)
-        
+        content = re.sub(r"(?<!\*)\*([^*]+?)\*(?!\*)", r"<em>\1</em>", content)
+
         return content
+
+    def _convert_tables(self, content: str) -> str:
+        """마크다운 표를 HTML 표로 변환"""
+        lines = content.split("\n")
+        result_lines = []
+        in_table = False
+        table_lines = []
+        header_processed = False
+
+        for line in lines:
+            # 표 시작/종료 체크 (| 로 시작하고 끝나는 라인)
+            if re.match(r"^\|.*\|$", line.strip()):
+                if not in_table:
+                    # 표 시작
+                    in_table = True
+                    table_lines = []
+                    header_processed = False
+
+                table_lines.append(line)
+            else:
+                if in_table:
+                    # 표 종료 - HTML로 변환
+                    html_table = self._process_table_lines(table_lines)
+                    result_lines.append(html_table)
+                    in_table = False
+                    table_lines = []
+
+                # 일반 라인 추가
+                result_lines.append(line)
+
+        # 마지막에 표가 열려있다면 닫기
+        if in_table:
+            html_table = self._process_table_lines(table_lines)
+            result_lines.append(html_table)
+
+        return "\n".join(result_lines)
+
+    def _process_table_lines(self, table_lines: List[str]) -> str:
+        """표 라인들을 HTML 표로 변환"""
+        if not table_lines:
+            return ""
+
+        html_parts = [f'<table class="{self.css_classes["table"]}">']
+
+        for i, line in enumerate(table_lines):
+            # | 제거하고 셀 분할
+            cells = [cell.strip() for cell in line.strip().split("|")[1:-1]]
+
+            if i == 0:
+                # 헤더 행
+                html_parts.append("  <thead>")
+                html_parts.append("    <tr>")
+                for cell in cells:
+                    html_parts.append(
+                        f'      <th class="{self.css_classes["table_header"]}">{cell}</th>'
+                    )
+                html_parts.append("    </tr>")
+                html_parts.append("  </thead>")
+                html_parts.append("  <tbody>")
+            elif i == 1 and "---" in line:
+                # 구분선 무시
+                continue
+            else:
+                # 데이터 행
+                html_parts.append("    <tr>")
+                for cell in cells:
+                    html_parts.append(
+                        f'      <td class="{self.css_classes["table_cell"]}">{cell}</td>'
+                    )
+                html_parts.append("    </tr>")
+
+        html_parts.append("  </tbody>")
+        html_parts.append("</table>")
+
+        return "\n".join(html_parts)
 
     def _convert_lists(self, content: str) -> str:
         """마크다운 목록을 HTML 목록으로 변환"""
