@@ -593,7 +593,7 @@ class EnhancedRAGPipeline:
         import random
 
         start_time = time.time()
-        target_sections = random.randint(5, 7)
+        target_sections = random.randint(7, 10)
         joined = ", ".join((lsi or [])[:5] + (longtail or [])[:3])
         prompt = f"""
 제목: {title}
@@ -603,6 +603,8 @@ class EnhancedRAGPipeline:
 아래 조건으로 블로그 문서 구조를 JSON으로 생성하세요.
 - H2 섹션 수: 정확히 {target_sections}개
 - 첫 번째 H2는 반드시 '개요', '소개', '시작하기' 중 하나의 성격을 가진 도입 섹션이어야 합니다 (자유롭게 표현 가능)
+- 마지막에서 두 번째 H2는 '정리와 마무리', '요약과 결론', '핵심 포인트' 등 전체 내용을 요약하는 섹션이어야 합니다
+- 마지막 H2는 반드시 '자주 묻는 질문', 'FAQ', '궁금한 점들' 등 질문-답변 형태의 섹션이어야 합니다
 - 각 H2마다 H3/H4는 유동적으로 0개 이상 포함 가능
 - 한국어 제목 사용, 키워드는 자연스럽게 포함
 
@@ -633,7 +635,7 @@ class EnhancedRAGPipeline:
             completion_tokens,
             duration,
             response.content,
-            "5-7개의 H2와 유동 H3/H4 구조 JSON",
+            "7-10개의 H2와 유동 H3/H4 구조 JSON (개요+마무리+FAQ 포함)",
         )
         try:
             import re, json as _json
