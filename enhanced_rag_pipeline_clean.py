@@ -28,6 +28,7 @@ from src.utils.config import load_config
 from src.utils.llm_factory import create_gpt5_nano, LLMFactory, LLMConfig
 from src.utils.rag import SimpleRAG
 from src.utils.image_optimizer import ImageOptimizer
+from src.utils.external_link_builder import ExternalLinkBuilder
 from langchain_core.messages import HumanMessage
 
 
@@ -42,6 +43,8 @@ class EnhancedRAGPipeline:
         self.openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         # 이미지 최적화 도구 초기화
         self.image_optimizer = ImageOptimizer()
+        # 외부링크 생성 도구 초기화
+        self.external_link_builder = ExternalLinkBuilder()
         self.cost_tracker = {
             "total_calls": 0,
             "total_tokens": {"prompt": 0, "completion": 0},
@@ -696,8 +699,39 @@ class EnhancedRAGPipeline:
                 # 다음을 위한 요약 생성
                 prev_summary = await self.summarize_previous(content)
 
-            # 5. 이미지 생성 (제목 + 섹션별 33% 확률)
-            print("5. 이미지 생성 중...")
+            # 5. 외부링크 생성 (초기 콘텐츠용)
+            print("5. 외부링크 생성 중...")
+            content_count = 1  # TODO: 실제 콘텐츠 수 추적 시스템 구현 예정
+
+            # 임시 마크다운 생성 (키워드 추출용)
+            temp_md_content = self.create_markdown(
+                tk["title"],
+                keyword,
+                sections_content,
+                {
+                    "lsi_keywords": tk.get("lsi_keywords", []),
+                    "longtail_keywords": tk.get("longtail_keywords", []),
+                },
+                {},  # 이미지는 빈 딕셔너리로
+            )
+
+            external_links = self.external_link_builder.generate_external_links(
+                keywords_data={
+                    "lsi_keywords": tk.get("lsi_keywords", []),
+                    "longtail_keywords": tk.get("longtail_keywords", []),
+                },
+                target_keyword=keyword,
+                content_count=content_count,
+                markdown_content=temp_md_content,  # 실제 본문 전달
+            )
+
+            link_summary = self.external_link_builder.get_links_summary(external_links)
+            print(f"   📎 생성된 링크: {link_summary['총_링크_수']}개")
+            print(f"     - 외부링크: {link_summary['외부링크_수']}개")
+            print(f"     - 홈페이지: {link_summary['홈페이지_링크_수']}개")
+
+            # 6. 이미지 생성 (제목 + 섹션별 20% 확률)
+            print("6. 이미지 생성 중...")
             images = {}
 
             # 메인 이미지 (제목 기반, 100% 확률)
@@ -740,12 +774,12 @@ class EnhancedRAGPipeline:
 
             total_duration = time.time() - start_time
 
-            # 6. 파일 생성 (별칭 포함)
-            print("6. 파일 생성 중...")
+            # 7. 파일 생성 (별칭 포함)
+            print("7. 파일 생성 중...")
             timestamp2 = datetime.now().strftime("%Y%m%d_%H%M%S")
             safe_kw2 = self._safe_fragment(keyword)
 
-            # MD (이미지 포함)
+            # MD (이미지 + 외부링크 포함)
             md_content = self.create_markdown(
                 tk["title"],
                 keyword,
@@ -756,6 +790,26 @@ class EnhancedRAGPipeline:
                 },
                 images,  # 이미지 정보 전달
             )
+
+            # 외부링크 삽입 전에 원본 링크 리스트를 백업
+            original_external_links = external_links.copy()
+
+            # 외부링크 삽입 (링크 리스트가 수정될 수 있음)
+            md_content = self.external_link_builder.insert_links_into_markdown(
+                md_content, external_links
+            )
+
+            # 실제 적용된 링크 수 재계산 (원본 링크 리스트 기준으로 마크다운 콘텐츠에서 확인)
+            applied_links = []
+            unused_links = []
+
+            for link in original_external_links:
+                # 마크다운 링크 패턴이 존재하는지 체크: [앵커텍스트](어떤URL이든)
+                link_pattern = f"[{link.anchor_text}]("
+                if link_pattern in md_content:
+                    applied_links.append(link)
+                else:
+                    unused_links.append(link)
             md_file = project_root / f"data/blog_{safe_kw2}_{timestamp2}.md"
             md_file.parent.mkdir(exist_ok=True)
             with open(md_file, "w", encoding="utf-8") as f:
@@ -776,7 +830,7 @@ class EnhancedRAGPipeline:
             with open(alias_html, "w", encoding="utf-8") as f:
                 f.write(html_content)
 
-            # 비용 리포트
+            # 비용 리포트 (외부링크 정보 포함)
             cost_report = self.create_cost_analysis_report(
                 keyword,
                 tk["title"],
@@ -787,6 +841,52 @@ class EnhancedRAGPipeline:
                 sections_content,
                 total_duration,
             )
+
+            # 외부링크 정보 추가 (실제 적용된 링크 기준)
+            cost_report["link_analysis"] = {
+                "external_links_generated": len(applied_links),
+                "link_summary": {
+                    "총_링크_수": len(applied_links),
+                    "외부링크_수": len(
+                        [l for l in applied_links if l.platform != "홈페이지"]
+                    ),
+                    "홈페이지_링크_수": len(
+                        [l for l in applied_links if l.platform == "홈페이지"]
+                    ),
+                    "플랫폼별": {},
+                },
+                "link_details": [
+                    {
+                        "anchor_text": link.anchor_text,
+                        "url": link.url,
+                        "platform": link.platform,
+                        "keyword_type": link.keyword_type,
+                    }
+                    for link in applied_links
+                ],
+                "unused_links": [
+                    {
+                        "anchor_text": link.anchor_text,
+                        "url": link.url,
+                        "platform": link.platform,
+                        "keyword_type": link.keyword_type,
+                        "reason": "키워드를 본문에서 찾을 수 없음",
+                    }
+                    for link in unused_links
+                ],
+            }
+
+            # 플랫폼별 통계 계산
+            for link in applied_links:
+                platform = link.platform
+                if (
+                    platform
+                    not in cost_report["link_analysis"]["link_summary"]["플랫폼별"]
+                ):
+                    cost_report["link_analysis"]["link_summary"]["플랫폼별"][
+                        platform
+                    ] = 0
+                cost_report["link_analysis"]["link_summary"]["플랫폼별"][platform] += 1
             json_file = (
                 project_root / f"data/cost_analysis_report_{safe_kw2}_{timestamp2}.json"
             )
@@ -813,6 +913,11 @@ class EnhancedRAGPipeline:
             print(f"생성 시간: {total_duration:.1f}초")
             print(f"섹션 수: {len(sections_content)}개")
             print(f"생성된 이미지: {len(images)}개")
+            print(f"생성된 외부링크: {len(applied_links)}개")
+            if unused_links:
+                print(
+                    f"   ⚠️  미사용 링크: {len(unused_links)}개 (키워드를 본문에서 찾을 수 없음)"
+                )
             print(
                 f"총 콘텐츠 길이: {sum(len(s['content']) for s in sections_content):,}자"
             )
@@ -825,6 +930,19 @@ class EnhancedRAGPipeline:
                 print(f"생성된 이미지 파일:")
                 for key, filename in images.items():
                     print(f"  - {key}: {filename}")
+
+            # 외부링크 정보 표시
+            if len(applied_links) > 0:
+                print(f"실제 적용된 외부링크:")
+                for link in applied_links:
+                    print(f"  - {link.anchor_text} → {link.platform}")
+
+            if len(unused_links) > 0:
+                print(f"미사용 외부링크:")
+                for link in unused_links:
+                    print(
+                        f"  - {link.anchor_text} → {link.platform} (본문에서 키워드 없음)"
+                    )
 
             return {
                 "success": True,
