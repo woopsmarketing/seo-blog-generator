@@ -12,10 +12,13 @@ import os
 import time
 import json
 import asyncio
+import base64
+import random
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, List, Any, Tuple
+from typing import Dict, List, Any, Tuple, Optional
 import re
+from openai import OpenAI
 
 # 프로젝트 루트 디렉토리를 Python 경로에 추가
 project_root = Path(__file__).parent
@@ -24,6 +27,7 @@ sys.path.insert(0, str(project_root))
 from src.utils.config import load_config
 from src.utils.llm_factory import create_gpt5_nano, LLMFactory, LLMConfig
 from src.utils.rag import SimpleRAG
+from src.utils.image_optimizer import ImageOptimizer
 from langchain_core.messages import HumanMessage
 
 
@@ -34,11 +38,17 @@ class EnhancedRAGPipeline:
         self.config = load_config()
         self.llm = create_gpt5_nano()
         self.rag = None
+        # OpenAI 클라이언트 초기화 (이미지 생성용)
+        self.openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        # 이미지 최적화 도구 초기화
+        self.image_optimizer = ImageOptimizer()
         self.cost_tracker = {
             "total_calls": 0,
             "total_tokens": {"prompt": 0, "completion": 0},
             "total_duration": 0,
+            "total_images": 0,  # 이미지 생성 횟수 추적
             "step_details": [],
+            "image_details": [],  # 이미지 생성 비용 추적
         }
 
     def _safe_fragment(self, text: str, max_len: int = 120) -> str:
@@ -227,6 +237,101 @@ class EnhancedRAGPipeline:
         response = self.llm.invoke(messages)
         return response.content.strip()
 
+    async def generate_image(self, prompt: str, purpose: str) -> Optional[str]:
+        """이미지 생성 (gpt-image-1 모델 사용)
+
+        Args:
+            prompt: 이미지 생성을 위한 영문 프롬프트
+            purpose: 이미지 용도 (cost tracking용)
+
+        Returns:
+            생성된 이미지의 base64 문자열 또는 None
+        """
+        try:
+            start_time = time.time()
+
+            # OpenAI Image API 호출 (gpt-image-1은 항상 base64로 반환)
+            response = self.openai_client.images.generate(
+                model="gpt-image-1",
+                prompt=prompt,
+                quality="low",  # 저품질 (가격 효율성)
+                size="1024x1024",  # 표준 사이즈
+                n=1,  # 1개 이미지
+            )
+
+            duration = time.time() - start_time
+
+            # 비용 계산 (gpt-image-1 low quality 1024x1024: $0.011)
+            image_cost = 0.011
+
+            # 이미지 생성 추적
+            self.cost_tracker["total_images"] += 1
+            self.cost_tracker["image_details"].append(
+                {
+                    "purpose": purpose,
+                    "timestamp": datetime.now().strftime("%H:%M:%S"),
+                    "duration_seconds": duration,
+                    "prompt": prompt[:100] + "..." if len(prompt) > 100 else prompt,
+                    "cost_usd": image_cost,
+                    "model": "gpt-image-1",
+                    "quality": "low",
+                    "size": "1024x1024",
+                }
+            )
+
+            # base64 이미지 데이터 반환 (gpt-image-1은 항상 b64_json 형태)
+            return response.data[0].b64_json
+
+        except Exception as e:
+            print(f"이미지 생성 실패 ({purpose}): {e}")
+            return None
+
+    def save_image_from_base64(
+        self, b64_data: str, file_path: Path, optimize: bool = True
+    ) -> bool:
+        """base64 이미지 데이터를 파일로 저장 및 최적화
+
+        Args:
+            b64_data: base64 인코딩된 이미지 데이터
+            file_path: 저장할 파일 경로
+            optimize: 이미지 최적화 여부
+
+        Returns:
+            저장 성공 여부
+        """
+        try:
+            # base64 디코딩하여 PNG 파일로 저장
+            image_data = base64.b64decode(b64_data)
+            file_path.parent.mkdir(exist_ok=True)
+
+            with open(file_path, "wb") as f:
+                f.write(image_data)
+
+            # 이미지 최적화 (옵션)
+            if optimize:
+                # 블로그용 최적화: 512x512 이하, 50KB 이하로 압축
+                optimization_result = self.image_optimizer.optimize_for_web(
+                    file_path,
+                    max_size=(512, 512),
+                    target_file_size_kb=50,
+                    quality_range=(70, 90),
+                )
+
+                if optimization_result["success"]:
+                    reduction = optimization_result["size_reduction_percent"]
+                    print(
+                        f"     📉 이미지 최적화: {optimization_result['file_size_change']} ({reduction}% 감소)"
+                    )
+                else:
+                    print(
+                        f"     ⚠️ 이미지 최적화 실패: {optimization_result.get('error', '알 수 없는 오류')}"
+                    )
+
+            return True
+        except Exception as e:
+            print(f"이미지 저장 실패: {e}")
+            return False
+
     async def generate_section_with_context(
         self,
         idx: int,
@@ -328,8 +433,9 @@ class EnhancedRAGPipeline:
         keyword: str,
         sections_content: List[Dict[str, Any]],
         keywords: Dict[str, List[str]],
+        images: Optional[Dict[str, str]] = None,
     ) -> str:
-        """마크다운 형식 생성"""
+        """마크다운 형식 생성 (이미지 포함)"""
         md_content = f"""# {title}
 
 **타겟 키워드:** {keyword}
@@ -341,8 +447,20 @@ class EnhancedRAGPipeline:
 
 """
 
-        for section in sections_content:
+        # 메인 이미지 추가 (제목 기반) - 워드프레스 호환 스타일
+        if images and "main" in images:
+            md_content += f'![{title}]({images["main"]})\n\n'
+
+        for i, section in enumerate(sections_content):
             md_content += f"## {section['h2_title']}\n\n"
+
+            # 섹션 이미지 추가 (33% 확률로) - 워드프레스 호환 스타일
+            section_image_key = f"section_{i+1}"
+            if images and section_image_key in images:
+                md_content += (
+                    f'![{section["h2_title"]}]({images[section_image_key]})\n\n'
+                )
+
             md_content += f"{section['content']}\n\n"
 
         return md_content
@@ -356,9 +474,14 @@ class EnhancedRAGPipeline:
         total_duration: float,
     ) -> Dict[str, Any]:
         """상세한 비용 분석 보고서 생성"""
-        total_cost = sum(
+        # 텍스트 생성 비용
+        text_cost = sum(
             step["estimated_cost_usd"] for step in self.cost_tracker["step_details"]
         )
+        # 이미지 생성 비용
+        image_cost = sum(img["cost_usd"] for img in self.cost_tracker["image_details"])
+        total_cost = text_cost + image_cost
+
         total_tokens = (
             self.cost_tracker["total_tokens"]["prompt"]
             + self.cost_tracker["total_tokens"]["completion"]
@@ -373,10 +496,13 @@ class EnhancedRAGPipeline:
             },
             "cost_analysis": {
                 "pipeline_summary": {
-                    "model_used": "gpt-5-nano",
+                    "model_used": "gpt-5-nano + gpt-image-1",
                     "total_duration_seconds": round(total_duration, 1),
                     "sections_generated": len(sections_content),
+                    "images_generated": self.cost_tracker["total_images"],
                     "total_estimated_cost_usd": round(total_cost, 6),
+                    "text_cost_usd": round(text_cost, 6),
+                    "image_cost_usd": round(image_cost, 6),
                     "cost_per_section": (
                         round(total_cost / len(sections_content), 6)
                         if sections_content
@@ -439,7 +565,7 @@ class EnhancedRAGPipeline:
             },
         }
 
-        # 단계별 분석 추가
+        # 단계별 분석 추가 (텍스트)
         for i, step in enumerate(self.cost_tracker["step_details"], 1):
             report["cost_analysis"]["step_by_step_analysis"][
                 f"step_{i}_{step['step']}"
@@ -449,6 +575,23 @@ class EnhancedRAGPipeline:
                 "model_calls": 1,
                 "cost": f"${step['estimated_cost_usd']:.6f}",
                 "output": step["output_summary"],
+                "type": "text_generation",
+            }
+
+        # 이미지 생성 분석 추가
+        for i, img in enumerate(self.cost_tracker["image_details"], 1):
+            report["cost_analysis"]["step_by_step_analysis"][
+                f"image_{i}_{img['purpose']}"
+            ] = {
+                "timestamp": img["timestamp"],
+                "duration": f"{img['duration_seconds']:.1f}초",
+                "model_calls": 1,
+                "cost": f"${img['cost_usd']:.3f}",
+                "output": img["prompt"],
+                "type": "image_generation",
+                "model": img["model"],
+                "quality": img["quality"],
+                "size": img["size"],
             }
 
         # 섹션별 분석 추가
@@ -545,14 +688,56 @@ class EnhancedRAGPipeline:
                 # 다음을 위한 요약 생성
                 prev_summary = await self.summarize_previous(content)
 
+            # 5. 이미지 생성 (제목 + 섹션별 33% 확률)
+            print("5. 이미지 생성 중...")
+            images = {}
+
+            # 메인 이미지 (제목 기반, 100% 확률)
+            print("   - 메인 이미지 생성...")
+            main_prompt = f"Clean minimalist infographic diagram about '{keyword}', visual concept illustration, no text or letters, chart elements, flow diagram style, professional design, simple color scheme"
+            main_image_b64 = await self.generate_image(main_prompt, "main_title")
+
+            if main_image_b64:
+                main_image_filename = f"main_{safe_kw}.png"
+                main_image_path = project_root / f"data/images/{main_image_filename}"
+                if self.save_image_from_base64(main_image_b64, main_image_path):
+                    # 워드프레스 호환 URL 형태 (향후 업로드 시 교체 예정)
+                    images["main"] = (
+                        f"https://your-wordpress-site.com/wp-content/uploads/2024/images/{main_image_filename}"
+                    )
+                    print(f"     ✅ 메인 이미지 저장: {main_image_filename}")
+
+            # 섹션별 이미지 (20% 확률)
+            for i, section in enumerate(sections_content):
+                if random.random() < 0.2:  # 20% 확률
+                    print(f"   - 섹션 {i+1} 이미지 생성: {section['h2_title']}")
+                    section_prompt = f"Simple visual diagram for '{section['h2_title']}' concept related to {keyword}, no text or words, minimalist chart design, geometric shapes, clean infographic elements, conceptual illustration"
+                    section_image_b64 = await self.generate_image(
+                        section_prompt, f"section_{i+1}"
+                    )
+
+                    if section_image_b64:
+                        section_image_filename = f"section_{i+1}_{safe_kw}.png"
+                        section_image_path = (
+                            project_root / f"data/images/{section_image_filename}"
+                        )
+                        if self.save_image_from_base64(
+                            section_image_b64, section_image_path
+                        ):
+                            # 워드프레스 호환 URL 형태 (향후 업로드 시 교체 예정)
+                            images[f"section_{i+1}"] = (
+                                f"https://your-wordpress-site.com/wp-content/uploads/2024/images/{section_image_filename}"
+                            )
+                            print(f"     ✅ 섹션 이미지 저장: {section_image_filename}")
+
             total_duration = time.time() - start_time
 
-            # 5. 파일 생성 (별칭 포함)
-            print("5. 파일 생성 중...")
+            # 6. 파일 생성 (별칭 포함)
+            print("6. 파일 생성 중...")
             timestamp2 = datetime.now().strftime("%Y%m%d_%H%M%S")
             safe_kw2 = self._safe_fragment(keyword)
 
-            # MD
+            # MD (이미지 포함)
             md_content = self.create_markdown(
                 tk["title"],
                 keyword,
@@ -561,6 +746,7 @@ class EnhancedRAGPipeline:
                     "lsi_keywords": tk.get("lsi_keywords", []),
                     "longtail_keywords": tk.get("longtail_keywords", []),
                 },
+                images,  # 이미지 정보 전달
             )
             md_file = project_root / f"data/blog_{safe_kw2}_{timestamp2}.md"
             md_file.parent.mkdir(exist_ok=True)
@@ -614,13 +800,23 @@ class EnhancedRAGPipeline:
             print("=" * 60)
             print(f"키워드: {keyword}")
             print(f"제목: {tk['title']}")
-            print(f"모델: gpt-5-nano (temperature=1.0)")
+            print(f"모델: gpt-5-nano + gpt-image-1 (temperature=1.0)")
             print(f"RAG 활성화: {'예' if rag_enabled else '아니오'}")
             print(f"생성 시간: {total_duration:.1f}초")
             print(f"섹션 수: {len(sections_content)}개")
+            print(f"생성된 이미지: {len(images)}개")
             print(
                 f"총 콘텐츠 길이: {sum(len(s['content']) for s in sections_content):,}자"
             )
+            # 이미지 비용 표시
+            if len(images) > 0:
+                total_image_cost = sum(
+                    img["cost_usd"] for img in self.cost_tracker["image_details"]
+                )
+                print(f"이미지 생성 비용: ${total_image_cost:.3f}")
+                print(f"생성된 이미지 파일:")
+                for key, filename in images.items():
+                    print(f"  - {key}: {filename}")
 
             return {
                 "success": True,
