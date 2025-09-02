@@ -29,6 +29,12 @@ from src.utils.llm_factory import create_gpt5_nano, LLMFactory, LLMConfig
 from src.utils.rag import SimpleRAG
 from src.utils.image_optimizer import ImageOptimizer
 from src.utils.external_link_builder import ExternalLinkBuilder
+from src.utils.wordpress_poster import WordPressPoster, create_wordpress_poster
+from src.utils.content_storage import ContentStorage, create_content_storage
+from src.utils.internal_link_builder import (
+    InternalLinkBuilder,
+    create_internal_link_builder,
+)
 from langchain_core.messages import HumanMessage
 
 
@@ -45,6 +51,12 @@ class EnhancedRAGPipeline:
         self.image_optimizer = ImageOptimizer()
         # 외부링크 생성 도구 초기화
         self.external_link_builder = ExternalLinkBuilder()
+        # 워드프레스 포스터 초기화 (옵션)
+        self.wordpress_poster = None
+        # 콘텐츠 저장소 초기화 (옵션)
+        self.content_storage = None
+        # 내부링크 빌더 초기화 (옵션)
+        self.internal_link_builder = None
         self.cost_tracker = {
             "total_calls": 0,
             "total_tokens": {"prompt": 0, "completion": 0},
@@ -110,59 +122,145 @@ class EnhancedRAGPipeline:
     async def generate_title_keywords(self, keyword: str) -> Dict[str, Any]:
         """단일 호출: 제목, LSI 키워드, 롱테일 키워드 생성"""
         start_time = time.time()
-        prompt = f"""
-키워드: {keyword}
+        # 1단계: 키워드 먼저 생성
+        keywords_prompt = f"""
+메인 키워드: {keyword}
 
-하나의 JSON으로 아래 4가지를 모두 구조화하여 반환하세요. 한국어로 작성합니다.
-1) title: SEO 최적화 블로그 제목 (키워드 포함, 60자 이내)
-2) lsi_keywords: 의미적으로 연관된 LSI 키워드 10개 배열
-3) longtail_keywords: 구체적인 롱테일 키워드 8개 배열
-4) notes: 간단한 생성 의도 설명 1-2문장
+이 메인 키워드를 중심으로 아래를 생성하세요:
 
-반드시 아래 형식의 단일 JSON만 출력하세요:
+1) lsi_keywords: 의미적으로 연관된 LSI 키워드 5-10개 배열
+2) longtail_keywords: 구체적인 롱테일 키워드 5-10개 배열
+
+반드시 아래 형식의 JSON만 출력하세요:
 {{
-  "title": "...",
   "lsi_keywords": ["..."],
-  "longtail_keywords": ["..."],
-  "notes": "..."
+  "longtail_keywords": ["..."]
 }}
 """
-        if self.rag and self.rag.vs:
-            rag_context = self.rag.query(f"{keyword} 관련 배경 정보", k=2)
-            prompt = f"{rag_context}\n\n{prompt}"
+        print("   📝 1단계: LSI/롱테일 키워드 생성 중...")
 
-        messages = [HumanMessage(content=prompt)]
-        response = self.llm.invoke(messages)
+        # 키워드 생성 호출
+        messages = [HumanMessage(content=keywords_prompt)]
+        keywords_response = self.llm.invoke(messages)
+
+        try:
+            import re, json as _json
+
+            m = re.search(r"\{[\s\S]*\}$", keywords_response.content.strip())
+            keywords_data = (
+                _json.loads(m.group(0)) if m else _json.loads(keywords_response.content)
+            )
+            lsi_keywords = keywords_data.get("lsi_keywords", [])
+            longtail_keywords = keywords_data.get("longtail_keywords", [])
+        except Exception:
+            lsi_keywords = [f"{keyword} 팁", f"{keyword} 방법"]
+            longtail_keywords = [f"{keyword} 초보 가이드"]
+
+        print("   📝 2단계: 제목 생성 중...")
+
+        # 2단계: 키워드들을 조합해서 제목 생성 (최대 3번 시도)
+        max_attempts = 3
+        final_title = None
+
+        for attempt in range(max_attempts):
+            # 1단계: 제목 생성 (먼저 LLM 호출)
+            all_keywords = [keyword] + lsi_keywords[:5] + longtail_keywords[:3]
+
+            title_prompt = f"""
+메인 키워드: {keyword}
+LSI 키워드: {', '.join(lsi_keywords[:5])}
+롱테일 키워드: {', '.join(longtail_keywords[:3])}
+
+위 키워드들을 자연스럽게 조합하여 SEO 최적화된 블로그 제목을 만드세요.
+- 메인 키워드는 반드시 포함
+- LSI나 롱테일 키워드 1-2개도 자연스럽게 포함
+- 60자 이내
+- 클릭을 유도하는 매력적인 제목
+
+제목만 출력하세요 (JSON이나 다른 형식 없이):
+"""
+
+            # 제목 생성
+            title_messages = [HumanMessage(content=title_prompt)]
+            title_response = self.llm.invoke(title_messages)
+            generated_title = title_response.content.strip().strip('"')
+
+            print(f"   📝 생성된 제목: {generated_title}")
+
+            # 2단계: 기존 제목들과 유사도 검사
+            avoid_titles = []
+            if self.content_storage:
+                try:
+                    similar_posts = self.content_storage.find_similar_posts(
+                        query_text=keyword,
+                        k=5,
+                        min_similarity_score=0.2,
+                        search_titles_only=True,
+                    )
+                    avoid_titles = [post["metadata"]["title"] for post in similar_posts]
+                    if avoid_titles:
+                        print(
+                            f"   📋 기존 제목 {len(avoid_titles)}개와 유사도 검사 중..."
+                        )
+                except Exception as e:
+                    print(f"   ⚠️ 제목 중복 검사 실패: {e}")
+
+            # 3단계: 유사도 검사 수행
+            if avoid_titles:
+                is_similar = False
+                for existing_title in avoid_titles:
+                    # 간단한 유사도 검사 (키워드 겹침 비율)
+                    title_words = set(generated_title.lower().split())
+                    existing_words = set(existing_title.lower().split())
+
+                    intersection = len(title_words & existing_words)
+                    union = len(title_words | existing_words)
+                    similarity = intersection / union if union > 0 else 0
+
+                    if similarity > 0.6:  # 60% 이상 유사하면
+                        is_similar = True
+                        print(
+                            f"   ⚠️ 유사한 제목 발견 (유사도 {similarity:.1%}): {existing_title}"
+                        )
+                        break
+
+                if not is_similar:
+                    print(f"   ✅ 고유한 제목 생성 완료")
+                    final_title = generated_title
+                    break
+                elif attempt < max_attempts - 1:
+                    print(f"   🔄 제목 재생성 시도 {attempt + 2}/{max_attempts}")
+            else:
+                final_title = generated_title
+                break
+
+        if not final_title:
+            final_title = generated_title  # 마지막 시도 결과 사용
+
+        # 비용 추적
         duration = time.time() - start_time
-        prompt_tokens = int(len(prompt.split()) * 1.3)
-        completion_tokens = int(len(response.content.split()) * 1.3)
+        prompt_tokens = int(len(keywords_prompt.split()) * 1.3) + int(
+            len(title_prompt.split()) * 1.3
+        )
+        completion_tokens = int(len(keywords_response.content.split()) * 1.3) + int(
+            len(title_response.content.split()) * 1.3
+        )
 
         self.track_llm_call(
             "generate_title_keywords",
             prompt_tokens,
             completion_tokens,
             duration,
-            response.content,
-            "키워드→제목/LSI/롱테일 단일 JSON 생성",
+            f"키워드: {len(lsi_keywords + longtail_keywords)}개, 제목: {final_title}",
+            "키워드 먼저 생성 → 제목 조합 생성",
         )
 
-        try:
-            import re, json as _json
-
-            m = re.search(r"\{[\s\S]*\}$", response.content.strip())
-            data = _json.loads(m.group(0)) if m else _json.loads(response.content)
-            # 보정
-            data.setdefault("lsi_keywords", [])
-            data.setdefault("longtail_keywords", [])
-            data.setdefault("notes", "")
-            return data
-        except Exception:
-            return {
-                "title": f"{keyword} 완벽 가이드",
-                "lsi_keywords": [f"{keyword} 팁", f"{keyword} 방법"],
-                "longtail_keywords": [f"{keyword} 초보 가이드"],
-                "notes": "기본 폴백 결과",
-            }
+        return {
+            "title": final_title,
+            "lsi_keywords": lsi_keywords,
+            "longtail_keywords": longtail_keywords,
+            "notes": f"메인 키워드 '{keyword}' 기반으로 LSI/롱테일 키워드를 먼저 생성한 후 제목을 조합 생성",
+        }
 
     async def generate_structure_json(
         self, title: str, keyword: str, lsi: List[str], longtail: List[str]
@@ -199,9 +297,7 @@ class EnhancedRAGPipeline:
 }}
 반드시 위의 JSON 스키마만 출력하세요.
 """
-        if self.rag and self.rag.vs:
-            rag_context = self.rag.query(f"{keyword} 전체 구조 설계 참고", k=3)
-            prompt = f"{rag_context}\n\n{prompt}"
+        # 구조 중복 방지를 위한 RAG 검색 제거 - 제목 중복 검사로 충분함
 
         messages = [HumanMessage(content=prompt)]
         response = self.llm.invoke(messages)
@@ -335,6 +431,92 @@ class EnhancedRAGPipeline:
             print(f"이미지 저장 실패: {e}")
             return False
 
+    async def generate_and_save_images(
+        self,
+        title: str,
+        sections: List[Dict],
+        keyword: str,
+        lsi_keywords: List[str] = None,
+        longtail_keywords: List[str] = None,
+    ) -> Dict[str, str]:
+        """메인 및 섹션별 이미지 생성 및 저장
+
+        Args:
+            title: 블로그 제목
+            sections: 섹션 리스트
+            keyword: 메인 키워드
+            lsi_keywords: LSI 키워드 리스트
+            longtail_keywords: 롱테일 키워드 리스트
+
+        Returns:
+            이미지 경로 딕셔너리 {"main": "path", "section_1": "path", ...}
+        """
+        images = {}
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        safe_keyword = self._safe_fragment(keyword)
+        images_dir = project_root / "data" / "images"
+        images_dir.mkdir(parents=True, exist_ok=True)
+
+        # 1. 메인 이미지 생성 (100% 확률)
+        print("4. 이미지 생성 중...")
+        main_prompt = f"Create a professional diagram or infographic about '{title}'. Chart, concept diagram, or infographic style. No text or words in the image. Clean, modern design."
+
+        main_image_data = await self.generate_image(
+            main_prompt, f"메인 이미지: {title}"
+        )
+        if main_image_data:
+            main_image_path = images_dir / f"main_{safe_keyword}_{timestamp}.png"
+            if self.save_image_from_base64(
+                main_image_data, main_image_path, optimize=True
+            ):
+                images["main"] = str(main_image_path)
+                print(f"   ✅ 메인 이미지 생성: {main_image_path.name}")
+
+        # 2. 섹션별 이미지 생성 (33% 확률)
+        for i, section in enumerate(sections):
+            if random.random() <= 0.33:  # 33% 확률
+                section_title = section.get("h2_title", f"섹션 {i+1}")
+                section_prompt = f"Create a diagram or concept illustration about '{section_title}'. Professional infographic style. No text or words. Clean design."
+
+                section_image_data = await self.generate_image(
+                    section_prompt, f"섹션 이미지: {section_title}"
+                )
+                if section_image_data:
+                    section_image_path = (
+                        images_dir / f"section_{i+1}_{safe_keyword}_{timestamp}.png"
+                    )
+                    if self.save_image_from_base64(
+                        section_image_data, section_image_path, optimize=True
+                    ):
+                        images[f"section_{i+1}"] = str(section_image_path)
+                        print(
+                            f"   ✅ 섹션 {i+1} 이미지 생성: {section_image_path.name}"
+                        )
+
+        return images
+
+    def cleanup_images_folder(self):
+        """이미지 폴더 정리 (생성된 이미지들 삭제)"""
+        try:
+            images_dir = project_root / "data" / "images"
+            if not images_dir.exists():
+                return
+
+            # .png 파일들만 삭제 (다른 파일은 보존)
+            deleted_count = 0
+            for image_file in images_dir.glob("*.png"):
+                try:
+                    image_file.unlink()
+                    deleted_count += 1
+                except Exception as e:
+                    print(f"   ⚠️ 이미지 삭제 실패: {image_file.name} - {e}")
+
+            if deleted_count > 0:
+                print(f"   🗑️ 이미지 폴더 정리 완료: {deleted_count}개 파일 삭제")
+
+        except Exception as e:
+            print(f"   ⚠️ 이미지 폴더 정리 실패: {e}")
+
     async def generate_section_with_context(
         self,
         idx: int,
@@ -345,6 +527,8 @@ class EnhancedRAGPipeline:
         full_structure_json: Dict[str, Any],
         prev_summary: str = "",
         next_h2: str = "",
+        lsi_keywords: List[str] = None,
+        longtail_keywords: List[str] = None,
     ) -> str:
         """섹션별 콘텐츠 생성 (컨텍스트와 티저 포함)"""
         start_time = time.time()
@@ -361,9 +545,30 @@ class EnhancedRAGPipeline:
         # 길이 정책: 1섹션 300자 내외, 그 외 500-800자
         length_rule = "분량: 약 300자" if idx == 1 else "분량: 500-800자"
 
+        # LSI/롱테일 키워드를 섹션별로 일부 포함 (0-2개씩 랜덤 선택)
+        import random
+
+        section_keywords = []
+        if lsi_keywords:
+            # LSI 키워드에서 0-2개 랜덤 선택
+            lsi_count = random.randint(0, min(2, len(lsi_keywords)))
+            section_keywords.extend(random.sample(lsi_keywords, lsi_count))
+
+        if longtail_keywords:
+            # 롱테일 키워드에서 0-2개 랜덤 선택
+            longtail_count = random.randint(0, min(2, len(longtail_keywords)))
+            section_keywords.extend(random.sample(longtail_keywords, longtail_count))
+
+        # 키워드 정보 구성
+        keywords_info = f"주요 키워드: {keyword}"
+        if section_keywords:
+            keywords_info += (
+                f"\n섹션 관련 키워드 (자연스럽게 포함): {', '.join(section_keywords)}"
+            )
+
         prompt = f"""
 문서 제목: {title}
-주요 키워드: {keyword}
+{keywords_info}
 전체 문서 구조(JSON): {structure_str}
 현재 섹션: {idx}/{total} - H2: {section.get('h2')}
 {ctx}
@@ -386,9 +591,10 @@ class EnhancedRAGPipeline:
 
 본문 출력 시작:
 """
-        if self.rag and self.rag.vs:
-            rag_context = self.rag.query(f"{keyword} {section.get('h2','')} 배경", k=2)
-            prompt = f"{rag_context}\n\n{prompt}"
+        # RAG 검색 제거 - 독창적인 콘텐츠 생성을 위해
+        # if self.rag and self.rag.vs:
+        #     rag_context = self.rag.query(f"{keyword} {section.get('h2','')} 배경", k=2)
+        #     prompt = f"{rag_context}\n\n{prompt}"
 
         messages = [HumanMessage(content=prompt)]
         response = self.llm.invoke(messages)
@@ -620,7 +826,121 @@ class EnhancedRAGPipeline:
 
         return report
 
-    async def run_complete_pipeline(self, keyword: str) -> Dict[str, Any]:
+    def setup_wordpress(self) -> bool:
+        """워드프레스 연결 설정 및 테스트"""
+        try:
+            self.wordpress_poster = create_wordpress_poster()
+            return self.wordpress_poster.test_connection()
+        except Exception as e:
+            print(f"워드프레스 설정 실패: {e}")
+            return False
+
+    def setup_content_storage(self) -> bool:
+        """콘텐츠 저장소 설정"""
+        try:
+            self.content_storage = create_content_storage()
+            stats = self.content_storage.get_storage_stats()
+            print(f"   콘텐츠 저장소: {stats['total_posts']}개 포스트 저장됨")
+
+            # 내부링크 빌더도 함께 설정 (콘텐츠 저장소가 있을 때만)
+            if self.content_storage and stats["total_posts"] > 0:
+                self.internal_link_builder = create_internal_link_builder(
+                    self.content_storage
+                )
+                print(
+                    f"   내부링크 빌더: 활성화 ({stats['total_posts']}개 포스트 기반)"
+                )
+            else:
+                print(f"   내부링크 빌더: 비활성화 (저장된 포스트 없음)")
+
+            return True
+        except Exception as e:
+            print(f"콘텐츠 저장소 설정 실패: {e}")
+            return False
+
+    async def upload_to_wordpress(
+        self,
+        title: str,
+        html_content: str,
+        keyword: str,
+        lsi_keywords: List[str] = None,
+        longtail_keywords: List[str] = None,
+        images_dir: Optional[Path] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """워드프레스에 콘텐츠 업로드"""
+        if not self.wordpress_poster:
+            print("⚠️ 워드프레스가 설정되지 않음. setup_wordpress()를 먼저 호출하세요.")
+            return None
+
+        try:
+            print("8. 워드프레스 업로드 중...")
+
+            # 이미지가 있는 경우 HTML 콘텐츠 내 이미지 URL 교체
+            if images_dir and images_dir.exists():
+                html_content = self.wordpress_poster.process_images_in_content(
+                    html_content, images_dir
+                )
+
+            # 카테고리 자동 선별
+            all_keywords = [keyword]
+            if lsi_keywords:
+                all_keywords.extend(lsi_keywords)
+            if longtail_keywords:
+                all_keywords.extend(longtail_keywords)
+
+            categories = self.wordpress_poster.select_best_categories(
+                title=title, content=html_content, keywords=all_keywords
+            )
+
+            # 태그 설정
+            tags = [keyword]  # 주요 키워드를 태그로
+
+            # LSI 키워드를 태그로 추가 (처음 5개만)
+            if lsi_keywords:
+                tags.extend(lsi_keywords[:5])
+
+            # 롱테일 키워드 중 짧은 것들을 태그로 추가 (처음 3개만)
+            if longtail_keywords:
+                short_longtails = [lt for lt in longtail_keywords[:3] if len(lt) < 20]
+                tags.extend(short_longtails)
+
+            # 중복 제거
+            tags = list(set(tags))
+
+            # 대표 이미지 설정 (메인 이미지가 있는 경우)
+            featured_image_path = None
+            if images_dir:
+                main_image_files = list(images_dir.glob("main_*.png"))
+                if main_image_files:
+                    featured_image_path = main_image_files[0]
+
+            # 워드프레스에 포스트 업로드
+            result = self.wordpress_poster.post_article(
+                title=title,
+                html_content=html_content,
+                status="publish",  # 즉시 발행
+                category_names=categories,
+                tag_names=tags,
+                excerpt=f"{keyword}에 대한 완벽한 가이드입니다.",
+                featured_image_path=featured_image_path,
+            )
+
+            if result:
+                print(f"   ✅ 워드프레스 업로드 성공!")
+                print(f"   📄 포스트 ID: {result['id']}")
+                print(f"   🔗 URL: {result['url']}")
+                return result
+            else:
+                print(f"   ❌ 워드프레스 업로드 실패")
+                return None
+
+        except Exception as e:
+            print(f"워드프레스 업로드 중 오류: {e}")
+            return None
+
+    async def run_complete_pipeline(
+        self, keyword: str, upload_to_wp: bool = False
+    ) -> Dict[str, Any]:
         """완전한 RAG 파이프라인 실행"""
         start_time = time.time()
 
@@ -631,6 +951,15 @@ class EnhancedRAGPipeline:
             # 1. RAG 설정
             rag_enabled = self.setup_rag()
             print(f"1. RAG 시스템: {'활성화' if rag_enabled else '비활성화'}")
+
+            # 워드프레스 설정 (업로드가 요청된 경우)
+            wp_ready = False
+            if upload_to_wp:
+                wp_ready = self.setup_wordpress()
+                print(f"   워드프레스: {'연결됨' if wp_ready else '연결 실패'}")
+
+            # 콘텐츠 저장소 설정 (항상 활성화)
+            storage_ready = self.setup_content_storage()
 
             # 2. 단일 호출: 제목+키워드 JSON
             print("2. 제목/키워드 단일 JSON 생성 중...")
@@ -684,6 +1013,8 @@ class EnhancedRAGPipeline:
                     full_structure_json=structure,
                     prev_summary=prev_summary,
                     next_h2=next_h2,
+                    lsi_keywords=tk.get("lsi_keywords", []),
+                    longtail_keywords=tk.get("longtail_keywords", []),
                 )
 
                 # 모델 응답 후 정리: 중복 H2/안내문 제거
@@ -715,20 +1046,130 @@ class EnhancedRAGPipeline:
                 {},  # 이미지는 빈 딕셔너리로
             )
 
-            external_links = self.external_link_builder.generate_external_links(
-                keywords_data={
+            # 실제 콘텐츠에서 사용된 키워드만 추출
+            used_keywords = self.external_link_builder.extract_keywords_from_content(
+                temp_md_content,
+                {
+                    "keyword": keyword,
                     "lsi_keywords": tk.get("lsi_keywords", []),
                     "longtail_keywords": tk.get("longtail_keywords", []),
                 },
-                target_keyword=keyword,
-                content_count=content_count,
-                markdown_content=temp_md_content,  # 실제 본문 전달
             )
 
-            link_summary = self.external_link_builder.get_links_summary(external_links)
-            print(f"   📎 생성된 링크: {link_summary['총_링크_수']}개")
-            print(f"     - 외부링크: {link_summary['외부링크_수']}개")
-            print(f"     - 홈페이지: {link_summary['홈페이지_링크_수']}개")
+            # 실제 사용된 키워드 수집
+            all_used_keywords = []
+
+            # 메인 키워드 (항상 포함)
+            all_used_keywords.append((keyword, "메인"))
+
+            # 실제 사용된 LSI 키워드만 추가
+            for kw in used_keywords.get("lsi_keywords", []):
+                all_used_keywords.append((kw, "LSI"))
+
+            # 실제 사용된 롱테일 키워드만 추가
+            for kw in used_keywords.get("longtail_keywords", []):
+                all_used_keywords.append((kw, "롱테일"))
+
+            print(f"   📊 실제 사용된 키워드: {len(all_used_keywords)}개")
+            print(f"     - 메인: 1개")
+            print(
+                f"     - LSI: {len(used_keywords.get('lsi_keywords', []))}개 (전체 {len(tk.get('lsi_keywords', []))}개 중)"
+            )
+            print(
+                f"     - 롱테일: {len(used_keywords.get('longtail_keywords', []))}개 (전체 {len(tk.get('longtail_keywords', []))}개 중)"
+            )
+
+            # 사용된 키워드 상세 표시
+            if all_used_keywords:
+                used_kw_list = [f"{kw}({kw_type})" for kw, kw_type in all_used_keywords]
+                print(f"     - 사용된 키워드 목록: {', '.join(used_kw_list)}")
+
+            # 5-1. 내부링크 우선 생성 (사용된 모든 키워드 대상)
+            internal_links = []
+            internal_keywords = []  # 실제로 내부링크에 사용된 키워드들
+
+            if self.internal_link_builder and all_used_keywords:
+                print(
+                    f"   🔗 내부링크 생성 중... (사용 키워드 {len(all_used_keywords)}개 검사)"
+                )
+
+                # 임시 포스트 ID 생성
+                temp_post_id = f"temp_{int(time.time())}"
+
+                # 모든 사용된 키워드로 내부링크 생성 시도
+                all_keywords_data = {
+                    "lsi_keywords": [
+                        kw for kw, kw_type in all_used_keywords if kw_type == "LSI"
+                    ],
+                    "longtail_keywords": [
+                        kw for kw, kw_type in all_used_keywords if kw_type == "롱테일"
+                    ],
+                }
+                main_keyword = next(
+                    (kw for kw, kw_type in all_used_keywords if kw_type == "메인"),
+                    keyword,
+                )
+
+                internal_links = self.internal_link_builder.generate_internal_links(
+                    current_post_id=temp_post_id,
+                    keywords_data=all_keywords_data,
+                    target_keyword=main_keyword,
+                    markdown_content=temp_md_content,
+                    max_links=len(all_used_keywords),  # 모든 키워드 시도
+                    min_similarity_score=0.3,  # 더 완화된 유사도
+                )
+
+                # 실제로 내부링크에 사용된 키워드들 수집
+                internal_keywords = [
+                    (link.anchor_text, "사용됨") for link in internal_links
+                ]
+
+                if internal_links:
+                    internal_summary = (
+                        self.internal_link_builder.get_internal_links_summary(
+                            internal_links
+                        )
+                    )
+                    print(f"   📎 생성된 내부링크: {internal_summary['총_링크_수']}개")
+                    print(f"     - 평균 유사도: {internal_summary['평균_유사도']}")
+                else:
+                    print(f"   📎 생성된 내부링크: 0개 (유사한 포스트 없음)")
+            else:
+                print(f"   📎 내부링크: 건너뜀 (저장된 포스트 없음)")
+
+            # 5-2. 외부링크 생성 (내부링크에 사용되지 않은 키워드들로)
+            external_links = []
+            internal_used_keywords = {link.anchor_text for link in internal_links}
+
+            # 내부링크에 사용되지 않은 키워드들 수집
+            remaining_keywords = [
+                (kw, kw_type)
+                for kw, kw_type in all_used_keywords
+                if kw not in internal_used_keywords
+            ]
+
+            print(f"   🌐 외부링크 생성 중...")
+            print(f"     - 내부링크 사용 키워드: {len(internal_used_keywords)}개")
+            print(f"     - 외부링크 대상 키워드: {len(remaining_keywords)}개")
+
+            if remaining_keywords:
+                remaining_kw_list = [
+                    f"{kw}({kw_type})" for kw, kw_type in remaining_keywords
+                ]
+                print(f"     - 외부링크 키워드: {', '.join(remaining_kw_list)}")
+
+                # 외부링크 생성
+                for kw, kw_type in remaining_keywords:
+                    link = self.external_link_builder.create_external_link(kw, kw_type)
+                    external_links.append(link)
+
+            if external_links:
+                link_summary = self.external_link_builder.get_links_summary(
+                    external_links
+                )
+                print(f"   📎 생성된 외부링크: {link_summary['총_링크_수']}개")
+            else:
+                print(f"   📎 생성된 외부링크: 0개 (모든 키워드가 내부링크에 사용됨)")
 
             # 6. 이미지 생성 (제목 + 섹션별 20% 확률)
             print("6. 이미지 생성 중...")
@@ -799,6 +1240,15 @@ class EnhancedRAGPipeline:
                 md_content, external_links
             )
 
+            # 내부링크 삽입 (외부링크 삽입 후)
+            if internal_links:
+                print("   🔗 내부링크 마크다운에 삽입 중...")
+                md_content = (
+                    self.internal_link_builder.insert_internal_links_into_markdown(
+                        md_content, internal_links
+                    )
+                )
+
             # 실제 적용된 링크 수 재계산 (원본 링크 리스트 기준으로 마크다운 콘텐츠에서 확인)
             applied_links = []
             unused_links = []
@@ -842,10 +1292,11 @@ class EnhancedRAGPipeline:
                 total_duration,
             )
 
-            # 외부링크 정보 추가 (실제 적용된 링크 기준)
+            # 링크 분석 정보 추가 (외부링크 + 내부링크)
             cost_report["link_analysis"] = {
                 "external_links_generated": len(applied_links),
-                "link_summary": {
+                "internal_links_generated": len(internal_links),
+                "external_link_summary": {
                     "총_링크_수": len(applied_links),
                     "외부링크_수": len(
                         [l for l in applied_links if l.platform != "홈페이지"]
@@ -855,7 +1306,14 @@ class EnhancedRAGPipeline:
                     ),
                     "플랫폼별": {},
                 },
-                "link_details": [
+                "internal_link_summary": (
+                    self.internal_link_builder.get_internal_links_summary(
+                        internal_links
+                    )
+                    if internal_links
+                    else {}
+                ),
+                "external_link_details": [
                     {
                         "anchor_text": link.anchor_text,
                         "url": link.url,
@@ -864,7 +1322,17 @@ class EnhancedRAGPipeline:
                     }
                     for link in applied_links
                 ],
-                "unused_links": [
+                "internal_link_details": [
+                    {
+                        "anchor_text": link.anchor_text,
+                        "target_url": link.target_url,
+                        "target_title": link.target_title,
+                        "similarity_score": link.similarity_score,
+                        "keyword_type": link.keyword_type,
+                    }
+                    for link in internal_links
+                ],
+                "unused_external_links": [
                     {
                         "anchor_text": link.anchor_text,
                         "url": link.url,
@@ -881,12 +1349,16 @@ class EnhancedRAGPipeline:
                 platform = link.platform
                 if (
                     platform
-                    not in cost_report["link_analysis"]["link_summary"]["플랫폼별"]
+                    not in cost_report["link_analysis"]["external_link_summary"][
+                        "플랫폼별"
+                    ]
                 ):
-                    cost_report["link_analysis"]["link_summary"]["플랫폼별"][
+                    cost_report["link_analysis"]["external_link_summary"]["플랫폼별"][
                         platform
                     ] = 0
-                cost_report["link_analysis"]["link_summary"]["플랫폼별"][platform] += 1
+                cost_report["link_analysis"]["external_link_summary"]["플랫폼별"][
+                    platform
+                ] += 1
             json_file = (
                 project_root / f"data/cost_analysis_report_{safe_kw2}_{timestamp2}.json"
             )
@@ -903,6 +1375,122 @@ class EnhancedRAGPipeline:
             print(f"   - HTML: {html_file.name} / 별칭: {alias_html.name}")
             print(f"   - Cost Report: {json_file.name} / 별칭: {alias_json.name}")
 
+            # 워드프레스 업로드 (요청된 경우)
+            wp_result = None
+            if upload_to_wp and wp_ready:
+                wp_result = await self.upload_to_wordpress(
+                    title=tk["title"],
+                    html_content=html_content,
+                    keyword=keyword,
+                    lsi_keywords=tk.get("lsi_keywords", []),
+                    longtail_keywords=tk.get("longtail_keywords", []),
+                    images_dir=project_root / "data/images",
+                )
+
+                # 워드프레스 업로드 후 처리
+                if wp_result:
+                    cost_report["wordpress_upload"] = {
+                        "success": True,
+                        "post_id": wp_result["id"],
+                        "post_url": wp_result["url"],
+                        "upload_date": wp_result["date"],
+                    }
+
+                    # 워드프레스 업로드 성공 시 FAISS에도 저장
+                    if storage_ready and self.content_storage:
+                        print("   📚 FAISS 벡터 저장소에 콘텐츠 저장 중...")
+
+                        # 마크다운 콘텐츠에서 텍스트만 추출 (링크, 이미지 등 제거)
+                        import re
+
+                        clean_content = re.sub(
+                            r"!\[.*?\]\(.*?\)", "", md_content
+                        )  # 이미지 제거
+                        clean_content = re.sub(
+                            r"\[([^\]]+)\]\([^)]+\)", r"\1", clean_content
+                        )  # 링크 텍스트만 유지
+                        clean_content = re.sub(
+                            r"#+\s*", "", clean_content
+                        )  # 헤딩 마크업 제거
+                        clean_content = re.sub(
+                            r"\*\*([^*]+)\*\*", r"\1", clean_content
+                        )  # 볼드 제거
+                        clean_content = re.sub(
+                            r"\n\s*\n", "\n\n", clean_content
+                        )  # 빈 줄 정리
+
+                        storage_success = self.content_storage.store_wordpress_post(
+                            post_data=wp_result,
+                            content=clean_content.strip(),
+                            keyword=keyword,
+                            lsi_keywords=tk.get("lsi_keywords", []),
+                            longtail_keywords=tk.get("longtail_keywords", []),
+                            categories=["블로그", "SEO"],
+                        )
+
+                        if storage_success:
+                            print("   ✅ FAISS 벡터 저장소에 저장 완료")
+                            cost_report["content_storage"] = {
+                                "success": True,
+                                "stored_at": datetime.now().isoformat(),
+                            }
+                        else:
+                            print("   ❌ FAISS 벡터 저장소 저장 실패")
+                            cost_report["content_storage"] = {
+                                "success": False,
+                                "error": "저장 중 오류 발생",
+                            }
+
+            # 워드프레스 업로드 없이도 콘텐츠 저장 (로컬 테스트용)
+            elif not upload_to_wp and storage_ready and self.content_storage:
+                print("8. FAISS 벡터 저장소에 콘텐츠 저장 중... (로컬)")
+
+                # 가상의 포스트 데이터 생성 (로컬 테스트용)
+                fake_post_data = {
+                    "id": f"local_{int(time.time())}",
+                    "title": tk["title"],
+                    "url": f"local://blog/{safe_kw2}",
+                    "date": datetime.now().isoformat(),
+                }
+
+                # 마크다운 콘텐츠에서 텍스트만 추출
+                import re
+
+                clean_content = re.sub(r"!\[.*?\]\(.*?\)", "", md_content)
+                clean_content = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", clean_content)
+                clean_content = re.sub(r"#+\s*", "", clean_content)
+                clean_content = re.sub(r"\*\*([^*]+)\*\*", r"\1", clean_content)
+                clean_content = re.sub(r"\n\s*\n", "\n\n", clean_content)
+
+                storage_success = self.content_storage.store_wordpress_post(
+                    post_data=fake_post_data,
+                    content=clean_content.strip(),
+                    keyword=keyword,
+                    lsi_keywords=tk.get("lsi_keywords", []),
+                    longtail_keywords=tk.get("longtail_keywords", []),
+                    categories=["블로그", "SEO"],
+                )
+
+                if storage_success:
+                    print("   ✅ FAISS 벡터 저장소에 저장 완료 (로컬)")
+                    cost_report["content_storage"] = {
+                        "success": True,
+                        "stored_at": datetime.now().isoformat(),
+                        "type": "local",
+                    }
+                else:
+                    print("   ❌ FAISS 벡터 저장소 저장 실패")
+                    cost_report["content_storage"] = {
+                        "success": False,
+                        "error": "저장 중 오류 발생",
+                    }
+
+            # 업데이트된 비용 리포트 저장
+            with open(json_file, "w", encoding="utf-8") as f:
+                json.dump(cost_report, f, ensure_ascii=False, indent=2)
+            with open(alias_json, "w", encoding="utf-8") as f:
+                json.dump(cost_report, f, ensure_ascii=False, indent=2)
+
             print("\n" + "=" * 60)
             print("Enhanced RAG 파이프라인 완료!")
             print("=" * 60)
@@ -914,9 +1502,10 @@ class EnhancedRAGPipeline:
             print(f"섹션 수: {len(sections_content)}개")
             print(f"생성된 이미지: {len(images)}개")
             print(f"생성된 외부링크: {len(applied_links)}개")
+            print(f"생성된 내부링크: {len(internal_links)}개")
             if unused_links:
                 print(
-                    f"   ⚠️  미사용 링크: {len(unused_links)}개 (키워드를 본문에서 찾을 수 없음)"
+                    f"   ⚠️  미사용 외부링크: {len(unused_links)}개 (키워드를 본문에서 찾을 수 없음)"
                 )
             print(
                 f"총 콘텐츠 길이: {sum(len(s['content']) for s in sections_content):,}자"
@@ -944,7 +1533,30 @@ class EnhancedRAGPipeline:
                         f"  - {link.anchor_text} → {link.platform} (본문에서 키워드 없음)"
                     )
 
-            return {
+            # 내부링크 정보 표시
+            if len(internal_links) > 0:
+                print(f"실제 적용된 내부링크:")
+                for link in internal_links:
+                    print(
+                        f"  - {link.anchor_text} → {link.target_title} (유사도: {link.similarity_score:.3f})"
+                    )
+
+            # 워드프레스 업로드 결과 표시
+            if upload_to_wp:
+                if wp_result:
+                    print(f"\n🚀 워드프레스 업로드 완료:")
+                    print(f"   📄 포스트 ID: {wp_result['id']}")
+                    print(f"   🔗 URL: {wp_result['url']}")
+                elif wp_ready:
+                    print(f"\n❌ 워드프레스 업로드 실패")
+                else:
+                    print(f"\n⚠️ 워드프레스 연결 실패로 업로드 건너뜀")
+
+            # 이미지 폴더 정리
+            print("\n7. 이미지 폴더 정리 중...")
+            self.cleanup_images_folder()
+
+            result_data = {
                 "success": True,
                 "files": {
                     "step1": str(alias_step1),
@@ -954,6 +1566,16 @@ class EnhancedRAGPipeline:
                     "cost_report": str(alias_json),
                 },
             }
+
+            # 워드프레스 업로드 결과 추가
+            if wp_result:
+                result_data["wordpress"] = {
+                    "post_id": wp_result["id"],
+                    "post_url": wp_result["url"],
+                    "upload_date": wp_result["date"],
+                }
+
+            return result_data
 
         except Exception as e:
             print(f"\n오류 발생: {e}")
@@ -965,13 +1587,40 @@ class EnhancedRAGPipeline:
 
 async def main():
     """메인 실행 함수"""
-    keyword = sys.argv[1] if len(sys.argv) > 1 else "부자되는 습관"
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Enhanced RAG Pipeline for SEO Blog Generation"
+    )
+    parser.add_argument(
+        "keyword", nargs="?", default="부자되는 습관", help="타겟 키워드"
+    )
+    parser.add_argument(
+        "--wp", "--wordpress", action="store_true", help="워드프레스에 자동 업로드"
+    )
+    parser.add_argument(
+        "--no-wp", action="store_true", help="워드프레스 업로드 건너뛰기 (기본값)"
+    )
+
+    args = parser.parse_args()
+
+    # 워드프레스 업로드 여부 결정
+    upload_to_wp = args.wp and not args.no_wp
+
+    if upload_to_wp:
+        print("🚀 워드프레스 자동 업로드 모드")
+    else:
+        print("📝 파일 생성만 수행 (워드프레스 업로드 안함)")
 
     pipeline = EnhancedRAGPipeline()
-    result = await pipeline.run_complete_pipeline(keyword)
+    result = await pipeline.run_complete_pipeline(
+        args.keyword, upload_to_wp=upload_to_wp
+    )
 
     if result["success"]:
         print(f"\n✅ 파이프라인 성공! 생성된 파일들을 확인하세요.")
+        if "wordpress" in result:
+            print(f"🌐 워드프레스 포스트: {result['wordpress']['post_url']}")
     else:
         print(f"\n❌ 파이프라인 실패: {result['error']}")
 

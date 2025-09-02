@@ -14,6 +14,8 @@ sqlalchemy>=2.0.0
 beautifulsoup4
 lxml
 colorlog
+python-wordpress-xmlrpc
+Pillow>=9.0.0
 tqdm
 pytest>=7.0.0
 pytest-asyncio

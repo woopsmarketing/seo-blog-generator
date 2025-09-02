@@ -70,13 +70,7 @@ class ExternalLinkBuilder:
             },
         }
 
-        # 홈페이지 링크 옵션
-        self.homepage_links = [
-            {"url": "https://your-website.com", "text": "홈페이지"},
-            {"url": "https://your-website.com/about", "text": "소개"},
-            {"url": "https://your-website.com/services", "text": "서비스"},
-            {"url": "https://your-website.com/contact", "text": "문의하기"},
-        ]
+        # 홈페이지 링크 제거됨 - 내부링크로 처리
 
     def encode_keyword(self, keyword: str, encoding_type: str) -> str:
         """키워드를 URL에 맞게 인코딩"""
@@ -110,16 +104,7 @@ class ExternalLinkBuilder:
             anchor_text=keyword, url=url, platform=platform, keyword_type=keyword_type
         )
 
-    def create_homepage_link(self) -> ExternalLink:
-        """홈페이지 링크 생성"""
-        home_link = random.choice(self.homepage_links)
-
-        return ExternalLink(
-            anchor_text=home_link["text"],
-            url=home_link["url"],
-            platform="홈페이지",
-            keyword_type="homepage",
-        )
+    # create_homepage_link 함수 제거됨 - 홈페이지 링크는 내부링크로 처리
 
     def extract_keywords_from_content(
         self, content: str, keywords_data: Dict[str, List[str]]
@@ -218,17 +203,8 @@ class ExternalLinkBuilder:
         for kw in keywords_data.get("longtail_keywords", []):
             all_keywords.append((kw, "롱테일"))
 
-        # 3. 초기 콘텐츠 전략 (5개 미만)
-        if content_count < 5:
-            external_ratio = 0.7  # 70% 외부링크
-            homepage_ratio = 0.3  # 30% 홈페이지
-        elif content_count < 15:
-            external_ratio = 0.5  # 50% 외부링크
-            homepage_ratio = 0.5  # 50% 홈페이지
-        else:
-            # 15개 이상부터는 내부링크 시스템 사용
-            external_ratio = 0.2
-            homepage_ratio = 0.8
+        # 3. 외부링크만 생성 (홈페이지 링크 제거됨)
+        # 모든 키워드는 외부링크로만 처리
 
         # 4. 링크 생성
         links = []
@@ -237,14 +213,9 @@ class ExternalLinkBuilder:
         )
 
         for keyword, keyword_type in selected_keywords:
-            if random.random() < external_ratio:
-                # 외부링크 생성
-                link = self.create_external_link(keyword, keyword_type)
-                links.append(link)
-            else:
-                # 홈페이지 링크 생성
-                link = self.create_homepage_link()
-                links.append(link)
+            # 모든 키워드를 외부링크로 생성 (홈페이지 링크 제거됨)
+            link = self.create_external_link(keyword, keyword_type)
+            links.append(link)
 
         return links
 
@@ -299,8 +270,7 @@ class ExternalLinkBuilder:
         """생성된 링크들의 요약 정보"""
         summary = {
             "총_링크_수": len(links),
-            "외부링크_수": len([l for l in links if l.platform != "홈페이지"]),
-            "홈페이지_링크_수": len([l for l in links if l.platform == "홈페이지"]),
+            "외부링크_수": len(links),  # 모든 링크가 외부링크
             "플랫폼별": {},
         }
 
