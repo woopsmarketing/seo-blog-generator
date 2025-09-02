@@ -66,28 +66,31 @@ class SimpleHTMLConverter:
         # 3. 제목 변환 (H1, H2, H3, H4)
         html = self._convert_headings(html)
 
-        # 4. 텍스트 스타일 변환 (볼드, 이탤릭)
+        # 4. 용어 정리 섹션 변환 (볼드 변환보다 먼저)
+        html = self._convert_terms_section(html)
+
+        # 5. 텍스트 스타일 변환 (볼드, 이탤릭)
         html = self._convert_text_styles(html)
 
-        # 5. 이미지 변환 (링크보다 먼저 처리해야 함)
+        # 6. 이미지 변환 (링크보다 먼저 처리해야 함)
         html = self._convert_images(html)
 
-        # 6. 마크다운 링크 변환 (이미지 처리 후)
+        # 7. 마크다운 링크 변환 (이미지 처리 후)
         html = self._convert_links(html)
 
-        # 7. 표 변환
+        # 8. 표 변환
         html = self._convert_tables(html)
 
-        # 8. 목록 변환
+        # 9. 목록 변환
         html = self._convert_lists(html)
 
-        # 9. 문단 변환
+        # 10. 문단 변환
         html = self._convert_paragraphs(html)
 
-        # 10. 특수 섹션 클래스 적용
+        # 11. 특수 섹션 클래스 적용
         html = self._apply_special_section_classes(html)
 
-        # 11. 정리 작업
+        # 12. 정리 작업
         html = self._cleanup_html(html)
 
         return html.strip()
@@ -120,20 +123,50 @@ class SimpleHTMLConverter:
         # H1 제목 제거 (워드프레스에서 title로 사용)
         content = re.sub(r"^# .+?\n\n", "", content, flags=re.MULTILINE)
 
-        # 메타데이터 패턴 제거: **키워드:** 값
-        content = re.sub(r"(\*\*[^:]+:[^\n]+\n)+\n", "", content, flags=re.MULTILINE)
+        # 메타데이터 패턴 제거: 특정 메타데이터만 제거
+        # **타겟 키워드:**, **예상 길이:**, **SEO 전략:**, **LSI 키워드:**, **롱테일 키워드:** 만 제거
+        meta_patterns = [
+            r"\*\*타겟 키워드:\*\*[^\n]+\n",
+            r"\*\*예상 길이:\*\*[^\n]+\n",
+            r"\*\*SEO 전략:\*\*[^\n]+\n",
+            r"\*\*LSI 키워드:\*\*[^\n]+\n",
+            r"\*\*롱테일 키워드:\*\*[^\n]+\n",
+        ]
+        for pattern in meta_patterns:
+            content = re.sub(pattern, "", content, flags=re.MULTILINE)
 
         return content
 
     def _convert_headings(self, content: str) -> str:
-        """마크다운 제목을 HTML 제목으로 변환 (H2부터 시작)"""
-        # H2 변환 (## 제목)
-        content = re.sub(
-            r"^## (.+)$",
-            f'<h2 class="{self.css_classes["section_title"]}">\\1</h2>',
-            content,
-            flags=re.MULTILINE,
-        )
+        """마크다운 제목을 HTML 제목으로 변환 (앵커 ID 포함)"""
+
+        def generate_anchor_id(title: str) -> str:
+            """제목에서 앵커 ID 생성"""
+            # 특수문자 제거하고 공백을 하이픈으로 변환
+            anchor_id = (
+                title.replace(" ", "-")
+                .replace(":", "")
+                .replace("?", "")
+                .replace("!", "")
+                .replace(",", "")
+                .replace(".", "")
+            )
+            return anchor_id
+
+        # H2 변환 (## 제목) - 앵커 ID 추가
+        def replace_h2(match):
+            title = match.group(1)
+            anchor_id = generate_anchor_id(title)
+
+            # 특별한 섹션들에 대한 고정 ID
+            if "📖 핵심 용어 정리" in title:
+                anchor_id = "terms-section"
+            elif "📚 목차" in title:
+                anchor_id = "toc-section"
+
+            return f'<h2 id="{anchor_id}" class="{self.css_classes["section_title"]}">{title}</h2>'
+
+        content = re.sub(r"^## (.+)$", replace_h2, content, flags=re.MULTILINE)
 
         # H3 변환 (### 제목)
         content = re.sub(
@@ -149,6 +182,36 @@ class SimpleHTMLConverter:
             f'<h4 class="{self.css_classes["subsubsection_title"]}">\\1</h4>',
             content,
             flags=re.MULTILINE,
+        )
+
+        return content
+
+    def _convert_terms_section(self, content: str) -> str:
+        """핵심 용어 정리 섹션의 **용어**: 설명 형태를 HTML로 변환 (마크다운 상태에서)"""
+        # 핵심 용어 정리 섹션 찾기 (마크다운 헤더 상태)
+        terms_section_pattern = r"(## 📖 핵심 용어 정리.*?)(?=\n## |\n# |$)"
+
+        def convert_terms_content(match):
+            """용어 정리 섹션 내용 변환"""
+            section_content = match.group(1)
+
+            # **용어**: 설명 패턴을 HTML로 변환
+            # 패턴: **용어명**: 설명내용
+            term_pattern = r"\*\*([^*:]+)\*\*:\s*([^\n]+)"
+
+            def replace_term(term_match):
+                term_name = term_match.group(1).strip()
+                term_explanation = term_match.group(2).strip()
+                return f'<div class="term-item"><strong>{term_name}</strong>: {term_explanation}</div>'
+
+            # 용어들을 HTML로 변환
+            section_content = re.sub(term_pattern, replace_term, section_content)
+
+            return section_content
+
+        # 핵심 용어 정리 섹션 변환
+        content = re.sub(
+            terms_section_pattern, convert_terms_content, content, flags=re.DOTALL
         )
 
         return content

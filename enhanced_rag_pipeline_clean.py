@@ -495,6 +495,148 @@ LSI 키워드: {', '.join(lsi_keywords[:5])}
 
         return images
 
+    def generate_table_of_contents(self, sections_content: List[Dict]) -> str:
+        """H2 기반 목차 생성 (앵커 링크 포함, 핵심 용어 정리 포함)"""
+        toc_lines = ["## 📚 목차\n"]
+
+        # 첫 번째: 핵심 용어 정리
+        toc_lines.append("1. [핵심 용어 정리](#핵심-용어-정리)")
+
+        # 나머지 섹션들 (번호 +1)
+        for i, section in enumerate(sections_content, 2):  # 2부터 시작
+            h2_title = section.get("h2_title", f"섹션 {i}")
+            # 마크다운 앵커 링크 생성 (한글 -> 영어, 공백 -> 하이픈)
+            anchor_id = (
+                h2_title.lower()
+                .replace(" ", "-")
+                .replace(":", "")
+                .replace("?", "")
+                .replace("!", "")
+            )
+            # 한글은 그대로 유지하되 특수문자만 제거
+            anchor_id = (
+                h2_title.replace(" ", "-")
+                .replace(":", "")
+                .replace("?", "")
+                .replace("!", "")
+                .replace(",", "")
+                .replace(".", "")
+            )
+            toc_lines.append(f"{i}. [{h2_title}](#{anchor_id})")
+
+        return "\n".join(toc_lines) + "\n"
+
+    async def extract_and_explain_terms(self, full_content: str, keyword: str) -> str:
+        """콘텐츠에서 어려운 용어 추출 및 설명 생성"""
+        start_time = time.time()
+
+        prompt = f"""
+다음은 '{keyword}' 주제의 블로그 콘텐츠입니다.
+초보자나 중급자가 읽을 때 이해하기 어려울 수 있는 전문 용어를 5-8개 선별하고, 각각을 한 줄로 쉽게 설명해주세요.
+
+=== 블로그 콘텐츠 ===
+{full_content[:4000]}  # 토큰 제한을 위해 일부만 사용
+
+=== 작업 지시 ===
+1. 위 콘텐츠에서 초보자가 모를 만한 전문 용어를 선별하세요
+2. 각 용어를 한 줄(25자 이내)로 간단명료하게 설명하세요
+3. 중복 용어나 너무 쉬운 용어는 제외하세요
+4. 반드시 아래 형식으로만 출력하세요
+
+=== 출력 형식 (예시) ===
+크롤링: 검색엔진이 웹페이지를 읽어가는 과정
+백링크: 다른 사이트에서 내 사이트로 연결되는 링크
+메타태그: 검색엔진에게 페이지 정보를 알려주는 코드
+인덱싱: 검색엔진이 페이지를 데이터베이스에 저장하는 작업
+앵커텍스트: 링크에 표시되는 클릭 가능한 텍스트
+
+위 형식으로 용어와 설명만 출력하세요:
+"""
+
+        messages = [HumanMessage(content=prompt)]
+        response = self.llm.invoke(messages)
+
+        # 용어 섹션 포맷팅 (앙커 ID 포함)
+        terms_section = '<h2 id="terms-section">📖 핵심 용어 정리</h2>\n\n'
+        terms_section += "본문을 읽기 전에 알아두면 좋은 용어들입니다.\n\n"
+
+        # LLM 응답을 파싱하여 용어 정리 (개선된 파싱)
+        response_text = response.content.strip()
+        lines = response_text.split("\n")
+        terms_found = 0
+
+        print(f"   🔍 LLM 응답 길이: {len(response_text)}자")
+        print(f"   📝 응답 라인 수: {len(lines)}개")
+        print(f"   📄 LLM 원본 응답:")
+        print(f"   {response_text}")
+        print("   " + "=" * 50)
+
+        for line in lines:
+            line = line.strip()
+            # 불필요한 텍스트 제거
+            if any(
+                skip in line.lower()
+                for skip in ["출력 형식", "예시", "작업 지시", "블로그 콘텐츠", "==="]
+            ):
+                continue
+
+            if ":" in line and len(line) > 8:  # 최소 길이 체크 강화
+                try:
+                    # 콜론으로 분할
+                    parts = line.split(":", 1)
+                    if len(parts) == 2:
+                        term = (
+                            parts[0]
+                            .strip()
+                            .replace("**", "")
+                            .replace("-", "")
+                            .replace("*", "")
+                            .strip()
+                        )
+                        explanation = parts[1].strip()
+
+                        # 유효성 검사
+                        if (
+                            term
+                            and explanation
+                            and len(term) > 1
+                            and len(explanation) > 5
+                            and not term.isdigit()
+                        ):  # 숫자만인 용어 제외
+                            terms_section += f"**{term}**: {explanation}\n\n"
+                            terms_found += 1
+                            print(f"   ✅ 용어 추가: {term}")
+                except Exception as e:
+                    print(f"   ⚠️ 파싱 오류: {line[:50]}...")
+                    continue
+
+        print(f"   📊 총 추출된 용어: {terms_found}개")
+
+        # 용어가 하나도 추출되지 않았다면 기본 용어 추가
+        if terms_found == 0:
+            print("   🔄 기본 용어로 대체")
+            terms_section += f"**{keyword}**: 이 글의 주요 주제입니다\n\n"
+            terms_section += (
+                f"**SEO**: 검색엔진 최적화로 웹사이트 노출을 높이는 기법\n\n"
+            )
+            terms_section += f"**키워드**: 검색할 때 사용하는 단어나 문구\n\n"
+
+        duration = time.time() - start_time
+        self.track_llm_call(
+            "extract_terms",
+            int(len(prompt.split()) * 1.3),
+            int(len(response.content.split()) * 1.3),
+            duration,
+            f"용어 {terms_found}개 추출",
+            "어려운 용어 추출 및 설명",
+        )
+
+        print(f"   📏 최종 terms_section 길이: {len(terms_section)}자")
+        print(f"   📄 최종 terms_section 미리보기:")
+        print(f"   {terms_section[:300]}...")
+
+        return terms_section
+
     def cleanup_images_folder(self):
         """이미지 폴더 정리 (생성된 이미지들 삭제)"""
         try:
@@ -529,8 +671,8 @@ LSI 키워드: {', '.join(lsi_keywords[:5])}
         next_h2: str = "",
         lsi_keywords: List[str] = None,
         longtail_keywords: List[str] = None,
-    ) -> str:
-        """섹션별 콘텐츠 생성 (컨텍스트와 티저 포함)"""
+    ) -> Tuple[str, List[str]]:
+        """섹션별 콘텐츠 생성 (컨텍스트와 티저 포함, 사용된 키워드 반환)"""
         start_time = time.time()
         structure_str = json.dumps(full_structure_json, ensure_ascii=False)
         ctx = f"이전 섹션 요약: {prev_summary}\n" if prev_summary else ""
@@ -545,19 +687,20 @@ LSI 키워드: {', '.join(lsi_keywords[:5])}
         # 길이 정책: 1섹션 300자 내외, 그 외 500-800자
         length_rule = "분량: 약 300자" if idx == 1 else "분량: 500-800자"
 
-        # LSI/롱테일 키워드를 섹션별로 일부 포함 (0-2개씩 랜덤 선택)
+        # LSI/롱테일 키워드를 섹션별로 매번 새로 랜덤 선택 (0-1개씩)
         import random
 
         section_keywords = []
-        if lsi_keywords:
-            # LSI 키워드에서 0-2개 랜덤 선택
-            lsi_count = random.randint(0, min(2, len(lsi_keywords)))
-            section_keywords.extend(random.sample(lsi_keywords, lsi_count))
 
-        if longtail_keywords:
-            # 롱테일 키워드에서 0-2개 랜덤 선택
-            longtail_count = random.randint(0, min(2, len(longtail_keywords)))
-            section_keywords.extend(random.sample(longtail_keywords, longtail_count))
+        # LSI 키워드에서 0-1개 랜덤 선택 (매 섹션마다)
+        if lsi_keywords and random.random() < 0.6:  # 60% 확률로 LSI 키워드 포함
+            selected_lsi = random.choice(lsi_keywords)
+            section_keywords.append(selected_lsi)
+
+        # 롱테일 키워드에서 0-1개 랜덤 선택 (매 섹션마다)
+        if longtail_keywords and random.random() < 0.4:  # 40% 확률로 롱테일 키워드 포함
+            selected_longtail = random.choice(longtail_keywords)
+            section_keywords.append(selected_longtail)
 
         # 키워드 정보 구성
         keywords_info = f"주요 키워드: {keyword}"
@@ -611,7 +754,7 @@ LSI 키워드: {', '.join(lsi_keywords[:5])}
             f"섹션 {idx} 본문 생성",
         )
 
-        return response.content.strip()
+        return response.content.strip(), section_keywords
 
     def _sanitize_section_content(self, h2_title: str, content: str) -> str:
         """모델 응답에서 중복 H2/안내문 등을 제거하여 깔끔한 본문만 남긴다."""
@@ -651,27 +794,33 @@ LSI 키워드: {', '.join(lsi_keywords[:5])}
         sections_content: List[Dict[str, Any]],
         keywords: Dict[str, List[str]],
         images: Optional[Dict[str, str]] = None,
+        table_of_contents: str = "",
+        terms_section: str = "",
     ) -> str:
-        """마크다운 형식 생성 (이미지 포함)"""
-        md_content = f"""# {title}
+        """마크다운 형식 생성 (목차, 용어 정리, 이미지 포함)"""
+        md_content = f"# {title}\n\n"
+        # 1. 목차 추가 (최상단)
+        if table_of_contents:
+            md_content += table_of_contents + "\n"
 
-**타겟 키워드:** {keyword}
-**예상 길이:** {sum(len(section['content']) for section in sections_content):,}자
-**SEO 전략:** 핵심 키워드와 LSI 키워드를 자연스럽게 제목 및 본문에 배치하여 SEO 효과 극대화
-
-**LSI 키워드:** {', '.join(keywords['lsi_keywords'])}
-**롱테일 키워드:** {', '.join(keywords['longtail_keywords'])}
-
-"""
-
-        # 메인 이미지 추가 (제목 기반) - 워드프레스 호환 스타일
+        # 2. 메인 이미지 추가 (목차 다음)
         if images and "main" in images:
             md_content += f'![{title}]({images["main"]})\n\n'
 
-        for i, section in enumerate(sections_content):
-            md_content += f"## {section['h2_title']}\n\n"
+        # 3. 용어 정리 추가 (이미지 다음)
+        print(f"   🔧 create_markdown에서 terms_section 길이: {len(terms_section)}자")
+        if terms_section:
+            print(f"   ✅ terms_section을 마크다운에 추가")
+            md_content += terms_section + "\n"
+        else:
+            print(f"   ❌ terms_section이 비어있음!")
 
-            # 섹션 이미지 추가 (33% 확률로) - 워드프레스 호환 스타일
+        # 4. 본문 섹션들 (마크다운 헤더로 생성, HTML 변환기에서 ID 추가)
+        for i, section in enumerate(sections_content):
+            # 마크다운 H2 헤더로 생성
+            md_content += f'## {section["h2_title"]}\n\n'
+
+            # 섹션 이미지 추가 (20% 확률로)
             section_image_key = f"section_{i+1}"
             if images and section_image_key in images:
                 md_content += (
@@ -873,7 +1022,7 @@ LSI 키워드: {', '.join(lsi_keywords[:5])}
             return None
 
         try:
-            print("8. 워드프레스 업로드 중...")
+            print("9. 워드프레스 업로드 중...")
 
             # 이미지가 있는 경우 HTML 콘텐츠 내 이미지 URL 교체
             if images_dir and images_dir.exists():
@@ -1000,11 +1149,12 @@ LSI 키워드: {', '.join(lsi_keywords[:5])}
             print("4. 섹션별 콘텐츠 생성 중...")
             sections_content = []
             prev_summary = ""
+            all_section_keywords = []  # 섹션별 사용된 키워드 추적
             total = len(sections)
 
             for i, sec in enumerate(sections, 1):
                 next_h2 = sections[i]["h2"] if i < total else ""
-                raw = await self.generate_section_with_context(
+                raw, section_keywords = await self.generate_section_with_context(
                     idx=i,
                     total=total,
                     section=sec,
@@ -1016,6 +1166,9 @@ LSI 키워드: {', '.join(lsi_keywords[:5])}
                     lsi_keywords=tk.get("lsi_keywords", []),
                     longtail_keywords=tk.get("longtail_keywords", []),
                 )
+
+                # 섹션별 사용된 키워드 저장
+                all_section_keywords.extend(section_keywords)
 
                 # 모델 응답 후 정리: 중복 H2/안내문 제거
                 content = self._sanitize_section_content(sec.get("h2", ""), raw)
@@ -1044,31 +1197,38 @@ LSI 키워드: {', '.join(lsi_keywords[:5])}
                     "longtail_keywords": tk.get("longtail_keywords", []),
                 },
                 {},  # 이미지는 빈 딕셔너리로
+                "",  # 목차는 빈 문자열 (키워드 추출용이므로 불필요)
+                "",  # 용어 정리도 빈 문자열 (아직 생성되지 않았으므로)
             )
 
-            # 실제 콘텐츠에서 사용된 키워드만 추출
-            used_keywords = self.external_link_builder.extract_keywords_from_content(
-                temp_md_content,
-                {
-                    "keyword": keyword,
-                    "lsi_keywords": tk.get("lsi_keywords", []),
-                    "longtail_keywords": tk.get("longtail_keywords", []),
-                },
-            )
-
-            # 실제 사용된 키워드 수집
+            # 섹션별로 실제 사용된 키워드 수집 (더 정확한 추적)
             all_used_keywords = []
 
             # 메인 키워드 (항상 포함)
             all_used_keywords.append((keyword, "메인"))
 
-            # 실제 사용된 LSI 키워드만 추가
-            for kw in used_keywords.get("lsi_keywords", []):
-                all_used_keywords.append((kw, "LSI"))
+            # 섹션별 키워드 분류 및 추가
+            lsi_used = set()
+            longtail_used = set()
 
-            # 실제 사용된 롱테일 키워드만 추가
-            for kw in used_keywords.get("longtail_keywords", []):
+            for kw in all_section_keywords:
+                if kw in tk.get("lsi_keywords", []):
+                    lsi_used.add(kw)
+                elif kw in tk.get("longtail_keywords", []):
+                    longtail_used.add(kw)
+
+            # 실제 사용된 키워드 추가
+            for kw in lsi_used:
+                all_used_keywords.append((kw, "LSI"))
+            for kw in longtail_used:
                 all_used_keywords.append((kw, "롱테일"))
+
+            # 키워드 사용량 정리 (백업용으로 기존 방식도 유지)
+            used_keywords = {
+                "keyword": keyword,
+                "lsi_keywords": list(lsi_used),
+                "longtail_keywords": list(longtail_used),
+            }
 
             print(f"   📊 실제 사용된 키워드: {len(all_used_keywords)}개")
             print(f"     - 메인: 1개")
@@ -1215,12 +1375,26 @@ LSI 키워드: {', '.join(lsi_keywords[:5])}
 
             total_duration = time.time() - start_time
 
-            # 7. 파일 생성 (별칭 포함)
-            print("7. 파일 생성 중...")
+            # 7. 목차 및 용어 정리 생성
+            print("7. 목차 및 용어 정리 생성 중...")
+
+            # 목차 생성 (LLM 호출 없이)
+            table_of_contents = self.generate_table_of_contents(sections_content)
+            print("   ✅ 목차 생성 완료")
+
+            # 전체 콘텐츠 조합 (용어 추출용)
+            full_content = "\n".join([sec["content"] for sec in sections_content])
+
+            # 용어 추출 및 설명 생성 (LLM 호출)
+            terms_section = await self.extract_and_explain_terms(full_content, keyword)
+            print("   ✅ 용어 정리 생성 완료")
+
+            # 8. 파일 생성 (별칭 포함)
+            print("8. 파일 생성 중...")
             timestamp2 = datetime.now().strftime("%Y%m%d_%H%M%S")
             safe_kw2 = self._safe_fragment(keyword)
 
-            # MD (이미지 + 외부링크 포함)
+            # MD (목차 + 용어 정리 + 이미지 + 외부링크 포함)
             md_content = self.create_markdown(
                 tk["title"],
                 keyword,
@@ -1230,6 +1404,8 @@ LSI 키워드: {', '.join(lsi_keywords[:5])}
                     "longtail_keywords": tk.get("longtail_keywords", []),
                 },
                 images,  # 이미지 정보 전달
+                table_of_contents,  # 목차 추가
+                terms_section,  # 용어 정리 추가
             )
 
             # 외부링크 삽입 전에 원본 링크 리스트를 백업
@@ -1443,7 +1619,7 @@ LSI 키워드: {', '.join(lsi_keywords[:5])}
 
             # 워드프레스 업로드 없이도 콘텐츠 저장 (로컬 테스트용)
             elif not upload_to_wp and storage_ready and self.content_storage:
-                print("8. FAISS 벡터 저장소에 콘텐츠 저장 중... (로컬)")
+                print("9. FAISS 벡터 저장소에 콘텐츠 저장 중... (로컬)")
 
                 # 가상의 포스트 데이터 생성 (로컬 테스트용)
                 fake_post_data = {
@@ -1553,7 +1729,7 @@ LSI 키워드: {', '.join(lsi_keywords[:5])}
                     print(f"\n⚠️ 워드프레스 연결 실패로 업로드 건너뜀")
 
             # 이미지 폴더 정리
-            print("\n7. 이미지 폴더 정리 중...")
+            print("\n10. 이미지 폴더 정리 중...")
             self.cleanup_images_folder()
 
             result_data = {
