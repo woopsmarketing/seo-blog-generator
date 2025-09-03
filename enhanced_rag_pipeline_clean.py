@@ -687,31 +687,33 @@ LSI 키워드: {', '.join(lsi_keywords[:5])}
         # 길이 정책: 1섹션 300자 내외, 그 외 500-800자
         length_rule = "분량: 약 300자" if idx == 1 else "분량: 500-800자"
 
-        # LSI/롱테일 키워드를 섹션별로 매번 새로 랜덤 선택 (0-1개씩)
+        # LSI/롱테일 키워드를 섹션별로 확률적으로 0-1개 선택
         import random
 
         section_keywords = []
 
-        # LSI 키워드에서 0-1개 랜덤 선택 (매 섹션마다)
-        if lsi_keywords and random.random() < 0.6:  # 60% 확률로 LSI 키워드 포함
-            selected_lsi = random.choice(lsi_keywords)
-            section_keywords.append(selected_lsi)
+        combined_keywords = []
+        if lsi_keywords:
+            combined_keywords.extend(lsi_keywords)
+        if longtail_keywords:
+            combined_keywords.extend(longtail_keywords)
 
-        # 롱테일 키워드에서 0-1개 랜덤 선택 (매 섹션마다)
-        if longtail_keywords and random.random() < 0.4:  # 40% 확률로 롱테일 키워드 포함
-            selected_longtail = random.choice(longtail_keywords)
-            section_keywords.append(selected_longtail)
+        # 섹션당 50% 확률로 최대 1개 키워드만 선택 (자연스러운 포함 유도)
+        if combined_keywords and random.random() < 0.5:
+            section_keywords.append(random.choice(combined_keywords))
 
-        # 키워드 정보 구성
-        keywords_info = f"주요 키워드: {keyword}"
+        # 키워드 정보 구성 (선택적 사용을 강조)
+        keywords_info = ""
         if section_keywords:
             keywords_info += (
-                f"\n섹션 관련 키워드 (자연스럽게 포함): {', '.join(section_keywords)}"
+                "선택적 키워드 목록 (자연스러운 경우에만 사용):\n"
+                + "\n".join([f"- {kw}" for kw in section_keywords])
+                + "\n※ 위 키워드들을 억지로 사용하지 마세요. 자연스러운 문맥에서만 사용하거나, 어색하다면 사용하지 않아도 됩니다."
             )
 
         prompt = f"""
 문서 제목: {title}
-{keywords_info}
+
 전체 문서 구조(JSON): {structure_str}
 현재 섹션: {idx}/{total} - H2: {section.get('h2')}
 {ctx}
@@ -731,7 +733,7 @@ LSI 키워드: {', '.join(lsi_keywords[:5])}
    - 도구 비교: | 도구명 | 장점 | 단점 | 가격 |
    - 단계별 가이드: | 단계 | 설명 | 주의사항 |
    - 팁 정리: | 상황 | 해결방법 | 효과 |
-
+9) {keywords_info}
 본문 출력 시작:
 """
         # RAG 검색 제거 - 독창적인 콘텐츠 생성을 위해
@@ -786,6 +788,24 @@ LSI 키워드: {', '.join(lsi_keywords[:5])}
         out = "\n".join(sanitized).strip()
         out = re.sub(r"\n\s*\n\s*\n+", "\n\n", out)
         return out
+
+    def _verify_keyword_usage(self, content: str, keywords: List[str]) -> List[str]:
+        """본문에서 실제로 사용된 키워드를 반환 (부분 일치, 대소문자 무시)
+
+        - 한국어 포함 문자열 단순 매칭 방식 사용
+        - 공백/대소문자 차이 감소를 위해 lower() 기반 비교
+        """
+        try:
+            lowered = content.lower()
+            used: List[str] = []
+            for kw in keywords:
+                if not kw:
+                    continue
+                if kw.lower() in lowered:
+                    used.append(kw)
+            return used
+        except Exception:
+            return []
 
     def create_markdown(
         self,
@@ -1201,37 +1221,43 @@ LSI 키워드: {', '.join(lsi_keywords[:5])}
                 "",  # 용어 정리도 빈 문자열 (아직 생성되지 않았으므로)
             )
 
-            # 섹션별로 실제 사용된 키워드 수집 (더 정확한 추적)
-            all_used_keywords = []
+            # 섹션별로 실제 사용된 키워드 수집 (본문 기반 검증)
+            # 후보 키워드: 메인 + LSI + 롱테일
+            candidate_lsi = tk.get("lsi_keywords", [])
+            candidate_longtail = tk.get("longtail_keywords", [])
+            candidate_all = [keyword] + candidate_lsi + candidate_longtail
 
-            # 메인 키워드 (항상 포함)
-            all_used_keywords.append((keyword, "메인"))
+            # 임시 마크다운에서 실제 사용 검증
+            actually_used = set(
+                self._verify_keyword_usage(temp_md_content, candidate_all)
+            )
 
-            # 섹션별 키워드 분류 및 추가
-            lsi_used = set()
-            longtail_used = set()
+            all_used_keywords = []  # [(키워드, 유형)]
 
-            for kw in all_section_keywords:
-                if kw in tk.get("lsi_keywords", []):
-                    lsi_used.add(kw)
-                elif kw in tk.get("longtail_keywords", []):
-                    longtail_used.add(kw)
+            # 메인 키워드
+            if keyword in actually_used:
+                all_used_keywords.append((keyword, "메인"))
 
-            # 실제 사용된 키워드 추가
-            for kw in lsi_used:
+            # LSI/롱테일 키워드
+            lsi_used_list = [kw for kw in candidate_lsi if kw in actually_used]
+            longtail_used_list = [
+                kw for kw in candidate_longtail if kw in actually_used
+            ]
+
+            for kw in lsi_used_list:
                 all_used_keywords.append((kw, "LSI"))
-            for kw in longtail_used:
+            for kw in longtail_used_list:
                 all_used_keywords.append((kw, "롱테일"))
 
-            # 키워드 사용량 정리 (백업용으로 기존 방식도 유지)
+            # 키워드 사용량 정리
             used_keywords = {
-                "keyword": keyword,
-                "lsi_keywords": list(lsi_used),
-                "longtail_keywords": list(longtail_used),
+                "keyword": keyword if keyword in actually_used else None,
+                "lsi_keywords": lsi_used_list,
+                "longtail_keywords": longtail_used_list,
             }
 
             print(f"   📊 실제 사용된 키워드: {len(all_used_keywords)}개")
-            print(f"     - 메인: 1개")
+            print(f"     - 메인: {1 if keyword in actually_used else 0}개")
             print(
                 f"     - LSI: {len(used_keywords.get('lsi_keywords', []))}개 (전체 {len(tk.get('lsi_keywords', []))}개 중)"
             )
@@ -1276,7 +1302,7 @@ LSI 키워드: {', '.join(lsi_keywords[:5])}
                     target_keyword=main_keyword,
                     markdown_content=temp_md_content,
                     max_links=len(all_used_keywords),  # 모든 키워드 시도
-                    min_similarity_score=0.3,  # 더 완화된 유사도
+                    min_similarity_score=0.15,  # 더 완화된 유사도
                 )
 
                 # 실제로 내부링크에 사용된 키워드들 수집
@@ -1394,7 +1420,7 @@ LSI 키워드: {', '.join(lsi_keywords[:5])}
             timestamp2 = datetime.now().strftime("%Y%m%d_%H%M%S")
             safe_kw2 = self._safe_fragment(keyword)
 
-            # MD (목차 + 용어 정리 + 이미지 + 외부링크 포함)
+            # MD (우선 목차 없이 생성 → 링크 삽입 후 목차 주입)
             md_content = self.create_markdown(
                 tk["title"],
                 keyword,
@@ -1404,7 +1430,7 @@ LSI 키워드: {', '.join(lsi_keywords[:5])}
                     "longtail_keywords": tk.get("longtail_keywords", []),
                 },
                 images,  # 이미지 정보 전달
-                table_of_contents,  # 목차 추가
+                "",  # 목차는 나중에 주입하여 링크 충돌 방지
                 terms_section,  # 용어 정리 추가
             )
 
@@ -1424,6 +1450,18 @@ LSI 키워드: {', '.join(lsi_keywords[:5])}
                         md_content, internal_links
                     )
                 )
+
+            # 목차는 링크 삽입이 모두 끝난 뒤에 제목 아래에 주입하여
+            # 목차 항목이 외부/내부 링크 대상이 되어 중복 링크가 생기는 문제를 방지
+            if table_of_contents:
+                insert_at = md_content.find("\n\n")  # 제목 라인 이후 위치
+                if insert_at != -1:
+                    md_content = (
+                        md_content[: insert_at + 2]
+                        + table_of_contents
+                        + "\n"
+                        + md_content[insert_at + 2 :]
+                    )
 
             # 실제 적용된 링크 수 재계산 (원본 링크 리스트 기준으로 마크다운 콘텐츠에서 확인)
             applied_links = []
