@@ -13,6 +13,7 @@
 
 #### 전체 래퍼
 - `.fs-article` - 전체 블로그 포스트 래퍼 (article 태그)
+- `.fs-section` - H2 기준 섹션 래퍼 (section 태그) **신규**
 
 #### 제목 관련 클래스
 - `.fs-h1` - H1 제목 (메인 타이틀) - 정의됨, 미사용
@@ -61,10 +62,22 @@
 
 ## 🔄 개선된 HTML 구조 예시
 
-### 전체 구조
+### 전체 구조 (개선됨 - 섹션 래퍼 추가)
 ```html
 <article class="fs-article">
-  <!-- 모든 콘텐츠 -->
+  <nav class="fs-toc">
+    <!-- 목차 -->
+  </nav>
+  
+  <section class="fs-section">
+    <h2 class="fs-h2">첫 번째 섹션</h2>
+    <!-- 섹션 콘텐츠 -->
+  </section>
+  
+  <section class="fs-section">
+    <h2 class="fs-h2">두 번째 섹션</h2>
+    <!-- 섹션 콘텐츠 -->
+  </section>
 </article>
 ```
 
@@ -113,12 +126,16 @@
 
 ### ✅ 개선된 기능들
 1. **전체 article 래퍼 추가** - 모든 콘텐츠를 `<article class="fs-article">`로 감쌈
-2. **이미지 구조 개선** - `<p><img></p>` → `<figure class="fs-figure"><img></figure>`
-3. **목차 구조 개선** - `<p>1. 링크<br>2. 링크</p>` → `<nav><ol><li>링크</li></ol></nav>` (자동 번호 매김)
-4. **용어 정리 구조화** - 개별 `<p>` → `<dl class="fs-terms"><dt><dd>...</dt></dd></dl>` (시맨틱 용어 정의)
-5. **단락 클래스 제거** - `<p class="fs-paragraph">` → `<p>` (간결성 향상)
+2. **H2 기준 섹션 래퍼 추가** - 각 H2와 그 콘텐츠를 `<section class="fs-section">`로 감쌈 **신규**
+3. **이미지 구조 개선** - `<p><img></p>` → `<figure class="fs-figure"><img></figure>`
+4. **목차 구조 개선** - `<p>1. 링크<br>2. 링크</p>` → `<nav><ol><li>링크</li></ol></nav>` (자동 번호 매김)
+5. **용어 정리 구조화** - 개별 `<p>` → `<dl class="fs-terms"><dt><dd>...</dt></dd></dl>` (시맨틱 용어 정의)
+6. **단락 클래스 제거** - `<p class="fs-paragraph">` → `<p>` (간결성 향상)
 
 ### 📈 변환 함수별 사용 클래스
+
+#### _wrap_sections() (신규)
+- `fs-section` - H2 기준 섹션 래퍼
 
 #### _wrap_with_article() (신규)
 - `fs-article` - 전체 래퍼
@@ -159,18 +176,19 @@
 
 ## 🎯 총 클래스 현황
 
-**정의된 클래스**: 22개 (fs-term-name, fs-term-description 추가)
-**실제 사용 클래스**: 18개
+**정의된 클래스**: 23개 (fs-section 추가)
+**실제 사용 클래스**: 19개
 **제거된 클래스**: 1개 (fs-paragraph)
 **미구현 클래스**: 3개 (fs-h1, fs-note, fs-faq-item)
 
 ## 🔍 SEO 및 접근성 개선사항
 
-1. **시맨틱 마크업**: `<article>`, `<nav>`, `<figure>`, `<dl><dt><dd>` 태그 사용
-2. **구조화된 목차**: `<nav><ol>` 구조로 스크린 리더 친화적 (자동 번호 매김)
-3. **용어 정의 최적화**: `<dl><dt><dd>` 구조로 의미론적 용어 정의
-4. **이미지 최적화**: `loading="lazy"` 속성으로 성능 향상
-5. **앵커 링크**: 모든 H2 제목에 자동 앵커 ID 생성
-6. **간결한 HTML**: 불필요한 클래스 제거로 가독성 향상
+1. **시맨틱 마크업**: `<article>`, `<section>`, `<nav>`, `<figure>`, `<dl><dt><dd>` 태그 사용
+2. **구조화된 섹션**: H2 기준으로 `<section>` 태그로 콘텐츠 구조화 **신규**
+3. **구조화된 목차**: `<nav><ol>` 구조로 스크린 리더 친화적 (자동 번호 매김)
+4. **용어 정의 최적화**: `<dl><dt><dd>` 구조로 의미론적 용어 정의
+5. **이미지 최적화**: `loading="lazy"` 속성으로 성능 향상
+6. **앵커 링크**: 모든 H2 제목에 자동 앵커 ID 생성
+7. **간결한 HTML**: 불필요한 클래스 제거로 가독성 향상
 
 모든 클래스는 `fs-` prefix를 사용하여 네임스페이스 충돌을 방지합니다.

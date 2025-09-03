@@ -30,6 +30,7 @@ class SimpleHTMLConverter:
         return {
             # 전체 래퍼
             "article_wrapper": "fs-article",  # 전체 래퍼
+            "section_wrapper": "fs-section",  # H2 기준 섹션 래퍼 (section 태그)
             # 섹션 관련
             "main_title": "fs-h1",  # H1 제목
             "section_title": "fs-h2",  # H2 제목
@@ -111,7 +112,10 @@ class SimpleHTMLConverter:
         # 13. 정리 작업
         html = self._cleanup_html(html)
 
-        # 14. 전체 article 래퍼로 감싸기
+        # 14. H2 기준 섹션 래퍼 추가
+        html = self._wrap_sections(html)
+
+        # 15. 전체 article 래퍼로 감싸기
         html = self._wrap_with_article(html)
 
         return html.strip()
@@ -177,6 +181,8 @@ class SimpleHTMLConverter:
                 .replace("!", "")
                 .replace(",", "")
                 .replace(".", "")
+                .replace("(", "")
+                .replace(")", "")
             )
             return anchor_id
 
@@ -499,31 +505,9 @@ class SimpleHTMLConverter:
         return "\n\n".join(html_paragraphs)
 
     def _apply_special_section_classes(self, content: str) -> str:
-        """특정 섹션에 특별한 클래스 적용"""
-        # FAQ 섹션
-        content = re.sub(
-            r'(<h2[^>]*class="[^"]*">.*?FAQ.*?</h2>)',
-            f'<div class="{self.css_classes["faq_section"]}">\\1</div>',
-            content,
-            flags=re.IGNORECASE,
-        )
-
-        # 개요 섹션
-        content = re.sub(
-            r'(<h2[^>]*class="[^"]*">.*?개요.*?</h2>)',
-            f'<div class="{self.css_classes["intro_section"]}">\\1</div>',
-            content,
-            flags=re.IGNORECASE,
-        )
-
-        # 마무리 섹션
-        content = re.sub(
-            r'(<h2[^>]*class="[^"]*">.*?마무리.*?</h2>)',
-            f'<div class="{self.css_classes["conclusion_section"]}">\\1</div>',
-            content,
-            flags=re.IGNORECASE,
-        )
-
+        """특정 섹션에 특별한 클래스 적용 - 섹션 래퍼와 호환되도록 비활성화"""
+        # 섹션 래퍼 기능과 충돌하므로 비활성화
+        # 대신 _wrap_sections에서 처리하도록 변경
         return content
 
     def _convert_toc_structure(self, content: str) -> str:
@@ -551,6 +535,22 @@ class SimpleHTMLConverter:
                     # 기존 숫자. 제거 (예: "1. " 제거)
                     item = re.sub(r"^\d+\.\s*", "", item)
                     if item:  # 비어있지 않은 항목만 추가
+                        # 링크의 href 속성에서 괄호 문제 수정
+                        def fix_anchor_href(match):
+                            href = match.group(1)
+                            text = match.group(2)
+                            # href에서 괄호 제거 (앵커 ID 생성 규칙과 동일하게)
+                            clean_href = href.replace("(", "").replace(")", "")
+                            return f'<a href="{clean_href}">{text}</a>'
+
+                        # 앵커 링크 수정
+                        item = re.sub(
+                            r'<a href="([^"]*)"[^>]*>([^<]*)</a>', fix_anchor_href, item
+                        )
+
+                        # 링크 밖의 닫는 괄호도 제거 (예: </a>) 패턴)
+                        item = re.sub(r"</a>\)", "</a>", item)
+
                         # ol 태그의 자동 번호 매김 사용 (CSS로 제어 가능)
                         toc_list_items.append(f"    <li>{item}</li>")
                         item_number += 1
@@ -581,6 +581,95 @@ class SimpleHTMLConverter:
         )
 
         return content
+
+    def _wrap_sections(self, content: str) -> str:
+        """H2 태그를 기준으로 섹션을 나누어 section 태그로 감싸기"""
+        # 먼저 nav 태그(목차)를 별도로 추출
+        nav_pattern = r'(<nav class="[^"]*">.*?</nav>)'
+        nav_match = re.search(nav_pattern, content, re.DOTALL)
+        nav_content = ""
+
+        if nav_match:
+            nav_content = nav_match.group(1)
+            # nav 태그를 임시로 제거
+            content = re.sub(
+                nav_pattern, "<!-- NAV_PLACEHOLDER -->", content, flags=re.DOTALL
+            )
+
+        # H2 태그로 콘텐츠를 분할
+        h2_pattern = r"(<h2[^>]*>.*?</h2>)"
+
+        # H2 태그를 기준으로 분할
+        parts = re.split(h2_pattern, content)
+
+        result = []
+        current_section = ""
+
+        for i, part in enumerate(parts):
+            part = part.strip()
+            if not part or part == "<!-- NAV_PLACEHOLDER -->":
+                continue
+
+            # H2 태그인지 확인
+            if re.match(r"<h2[^>]*>", part):
+                # 이전 섹션이 있으면 섹션으로 감싸기
+                if current_section:
+                    # 특수 섹션 클래스 확인
+                    section_classes = [self.css_classes["section_wrapper"]]
+
+                    # FAQ 섹션 확인
+                    if re.search(r"FAQ", current_section, re.IGNORECASE):
+                        section_classes.append(self.css_classes["faq_section"])
+                    # 개요 섹션 확인
+                    elif re.search(r"개요", current_section, re.IGNORECASE):
+                        section_classes.append(self.css_classes["intro_section"])
+                    # 마무리 섹션 확인
+                    elif re.search(r"마무리|결론", current_section, re.IGNORECASE):
+                        section_classes.append(self.css_classes["conclusion_section"])
+
+                    class_attr = " ".join(section_classes)
+                    wrapped_section = (
+                        f'<section class="{class_attr}">\n{current_section}\n</section>'
+                    )
+                    result.append(wrapped_section)
+
+                # 새 섹션 시작
+                current_section = part
+            else:
+                # H2가 아닌 콘텐츠는 현재 섹션에 추가
+                if current_section:  # H2가 있는 경우에만
+                    current_section += "\n\n" + part
+                else:
+                    # H2 없이 시작하는 콘텐츠는 그대로 유지
+                    result.append(part)
+
+        # 마지막 섹션 처리
+        if current_section:
+            # 특수 섹션 클래스 확인
+            section_classes = [self.css_classes["section_wrapper"]]
+
+            # FAQ 섹션 확인
+            if re.search(r"FAQ", current_section, re.IGNORECASE):
+                section_classes.append(self.css_classes["faq_section"])
+            # 개요 섹션 확인
+            elif re.search(r"개요", current_section, re.IGNORECASE):
+                section_classes.append(self.css_classes["intro_section"])
+            # 마무리 섹션 확인
+            elif re.search(r"마무리|결론", current_section, re.IGNORECASE):
+                section_classes.append(self.css_classes["conclusion_section"])
+
+            class_attr = " ".join(section_classes)
+            wrapped_section = (
+                f'<section class="{class_attr}">\n{current_section}\n</section>'
+            )
+            result.append(wrapped_section)
+
+        # nav 태그를 맨 앞에 추가 (섹션 밖에)
+        final_content = "\n\n".join(result)
+        if nav_content:
+            final_content = nav_content + "\n\n" + final_content
+
+        return final_content
 
     def _wrap_with_article(self, content: str) -> str:
         """전체 콘텐츠를 article 태그로 감싸기"""
