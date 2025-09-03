@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 Enhanced RAG Pipeline for SEO Blog Generation - Clean Version
 - Detailed cost analysis
@@ -9,6 +10,14 @@ Enhanced RAG Pipeline for SEO Blog Generation - Clean Version
 
 import sys
 import os
+
+# Windows 환경에서 UTF-8 출력 지원
+if sys.platform.startswith('win'):
+    import locale
+    if locale.getpreferredencoding().upper() != 'UTF-8':
+        import io
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 import time
 import json
 import asyncio
@@ -30,6 +39,7 @@ from src.utils.rag import SimpleRAG
 from src.utils.image_optimizer import ImageOptimizer
 from src.utils.external_link_builder import ExternalLinkBuilder
 from src.utils.wordpress_poster import WordPressPoster, create_wordpress_poster
+from src.utils.multi_wordpress_manager import MultiWordPressManager, create_multi_wordpress_manager
 from src.utils.content_storage import ContentStorage, create_content_storage
 from src.utils.internal_link_builder import (
     InternalLinkBuilder,
@@ -53,6 +63,8 @@ class EnhancedRAGPipeline:
         self.external_link_builder = ExternalLinkBuilder()
         # 워드프레스 포스터 초기화 (옵션)
         self.wordpress_poster = None
+        # 다중 워드프레스 매니저 초기화 (옵션)
+        self.multi_wp_manager = None
         # 콘텐츠 저장소 초기화 (옵션)
         self.content_storage = None
         # 내부링크 빌더 초기화 (옵션)
@@ -996,12 +1008,32 @@ LSI 키워드: {', '.join(lsi_keywords[:5])}
         return report
 
     def setup_wordpress(self) -> bool:
-        """워드프레스 연결 설정 및 테스트"""
+        """워드프레스 연결 설정 및 테스트 (기존 단일 계정)"""
         try:
             self.wordpress_poster = create_wordpress_poster()
             return self.wordpress_poster.test_connection()
         except Exception as e:
             print(f"워드프레스 설정 실패: {e}")
+            return False
+
+    def setup_multi_wordpress(self) -> bool:
+        """다중 워드프레스 계정 설정 및 테스트"""
+        try:
+            self.multi_wp_manager = create_multi_wordpress_manager()
+            results = self.multi_wp_manager.test_all_connections()
+            
+            # 최소 1개 이상의 계정이 활성화되어야 함
+            active_count = sum(1 for result in results.values() if result)
+            
+            if active_count > 0:
+                print(f"   ✅ 다중 워드프레스: {active_count}/{len(results)}개 계정 활성화")
+                return True
+            else:
+                print(f"   ❌ 다중 워드프레스: 모든 계정 연결 실패")
+                return False
+                
+        except Exception as e:
+            print(f"다중 워드프레스 설정 실패: {e}")
             return False
 
     def setup_content_storage(self) -> bool:
@@ -1035,12 +1067,135 @@ LSI 키워드: {', '.join(lsi_keywords[:5])}
         lsi_keywords: List[str] = None,
         longtail_keywords: List[str] = None,
         images_dir: Optional[Path] = None,
+        use_multi_account: bool = True,
     ) -> Optional[Dict[str, Any]]:
-        """워드프레스에 콘텐츠 업로드"""
-        if not self.wordpress_poster:
-            print("⚠️ 워드프레스가 설정되지 않음. setup_wordpress()를 먼저 호출하세요.")
+        """워드프레스에 콘텐츠 업로드 (다중 계정 지원)"""
+        
+        # 다중 계정 시스템 우선 사용
+        if use_multi_account and self.multi_wp_manager:
+            return await self._upload_with_multi_accounts(
+                title, html_content, keyword, lsi_keywords, longtail_keywords, images_dir
+            )
+        
+        # 기존 단일 계정 시스템 폴백
+        elif self.wordpress_poster:
+            return await self._upload_with_single_account(
+                title, html_content, keyword, lsi_keywords, longtail_keywords, images_dir
+            )
+        
+        else:
+            print("⚠️ 워드프레스가 설정되지 않음. setup_multi_wordpress() 또는 setup_wordpress()를 먼저 호출하세요.")
             return None
 
+    async def _upload_with_multi_accounts(
+        self,
+        title: str,
+        html_content: str,
+        keyword: str,
+        lsi_keywords: List[str] = None,
+        longtail_keywords: List[str] = None,
+        images_dir: Optional[Path] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """다중 계정을 이용한 워드프레스 업로드"""
+        try:
+            print("9. 다중 계정 워드프레스 업로드 중...")
+
+            # 1. 콘텐츠 분석 및 최적 계정 선택
+            all_keywords = [keyword]
+            if lsi_keywords:
+                all_keywords.extend(lsi_keywords)
+            if longtail_keywords:
+                all_keywords.extend(longtail_keywords)
+
+            account_id, account, match_score = self.multi_wp_manager.select_best_account(
+                title=title,
+                content=html_content,
+                keywords=all_keywords
+            )
+
+            print(f"   🎯 선택된 계정: {account.nickname}")
+            print(f"   📊 매칭 점수: {match_score:.3f}")
+            print(f"   🏷️ 전문 분야: {', '.join(account.expertise_categories)}")
+
+            # 2. 선택된 계정의 포스터 가져오기
+            poster = self.multi_wp_manager.get_poster(account_id)
+            if not poster:
+                print(f"   ❌ 계정 포스터를 찾을 수 없음: {account_id}")
+                return None
+
+            # 3. 이미지 처리
+            if images_dir and images_dir.exists():
+                html_content = poster.process_images_in_content(html_content, images_dir)
+
+            # 4. 카테고리 자동 선별
+            categories = poster.select_best_categories(
+                title=title, content=html_content, keywords=all_keywords
+            )
+
+            # 5. 태그 설정
+            tags = [keyword]
+            if lsi_keywords:
+                tags.extend(lsi_keywords[:5])
+            if longtail_keywords:
+                short_longtails = [lt for lt in longtail_keywords[:3] if len(lt) < 20]
+                tags.extend(short_longtails)
+            tags = list(set(tags))
+
+            # 6. 대표 이미지 설정
+            featured_image_path = None
+            if images_dir:
+                main_image_files = list(images_dir.glob("main_*.png"))
+                if main_image_files:
+                    featured_image_path = main_image_files[0]
+
+            # 7. 워드프레스에 포스트 업로드
+            result = poster.post_article(
+                title=title,
+                html_content=html_content,
+                status="publish",
+                category_names=categories,
+                tag_names=tags,
+                excerpt=f"{keyword}에 대한 완벽한 가이드입니다.",
+                featured_image_path=featured_image_path,
+            )
+
+            if result:
+                # 계정의 포스트 수 증가
+                self.multi_wp_manager.increment_post_count(account_id)
+                
+                print(f"   ✅ 다중 계정 워드프레스 업로드 성공!")
+                print(f"   👤 업로드 계정: {account.nickname}")
+                print(f"   📄 포스트 ID: {result['id']}")
+                print(f"   🔗 URL: {result['url']}")
+                
+                # 결과에 계정 정보 추가
+                result['selected_account'] = {
+                    'account_id': account_id,
+                    'nickname': account.nickname,
+                    'account_type': account.account_type.value,
+                    'match_score': match_score,
+                    'expertise_categories': account.expertise_categories
+                }
+                
+                return result
+            else:
+                print(f"   ❌ 다중 계정 워드프레스 업로드 실패")
+                return None
+
+        except Exception as e:
+            print(f"다중 계정 워드프레스 업로드 중 오류: {e}")
+            return None
+
+    async def _upload_with_single_account(
+        self,
+        title: str,
+        html_content: str,
+        keyword: str,
+        lsi_keywords: List[str] = None,
+        longtail_keywords: List[str] = None,
+        images_dir: Optional[Path] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """기존 단일 계정을 이용한 워드프레스 업로드"""
         try:
             print("9. 워드프레스 업로드 중...")
 
@@ -1123,9 +1278,19 @@ LSI 키워드: {', '.join(lsi_keywords[:5])}
 
             # 워드프레스 설정 (업로드가 요청된 경우)
             wp_ready = False
+            multi_wp_ready = False
             if upload_to_wp:
-                wp_ready = self.setup_wordpress()
-                print(f"   워드프레스: {'연결됨' if wp_ready else '연결 실패'}")
+                # 다중 계정 시스템 우선 시도
+                multi_wp_ready = self.setup_multi_wordpress()
+                
+                # 다중 계정 실패 시 기존 시스템 폴백
+                if not multi_wp_ready:
+                    print(f"   🔄 기존 워드프레스 시스템으로 폴백...")
+                    wp_ready = self.setup_wordpress()
+                    print(f"   워드프레스: {'연결됨' if wp_ready else '연결 실패'}")
+                
+                # 최종 준비 상태
+                wp_ready = multi_wp_ready or wp_ready
 
             # 콘텐츠 저장소 설정 (항상 활성화)
             storage_ready = self.setup_content_storage()
@@ -1599,6 +1764,7 @@ LSI 키워드: {', '.join(lsi_keywords[:5])}
                     lsi_keywords=tk.get("lsi_keywords", []),
                     longtail_keywords=tk.get("longtail_keywords", []),
                     images_dir=project_root / "data/images",
+                    use_multi_account=multi_wp_ready,  # 다중 계정 활성화 여부 전달
                 )
 
                 # 워드프레스 업로드 후 처리
@@ -1608,7 +1774,12 @@ LSI 키워드: {', '.join(lsi_keywords[:5])}
                         "post_id": wp_result["id"],
                         "post_url": wp_result["url"],
                         "upload_date": wp_result["date"],
+                        "multi_account_enabled": multi_wp_ready,
                     }
+                    
+                    # 다중 계정 정보 추가
+                    if multi_wp_ready and "selected_account" in wp_result:
+                        cost_report["wordpress_upload"]["selected_account"] = wp_result["selected_account"]
 
                     # 워드프레스 업로드 성공 시 FAISS에도 저장
                     if storage_ready and self.content_storage:
@@ -1761,6 +1932,16 @@ LSI 키워드: {', '.join(lsi_keywords[:5])}
                     print(f"\n🚀 워드프레스 업로드 완료:")
                     print(f"   📄 포스트 ID: {wp_result['id']}")
                     print(f"   🔗 URL: {wp_result['url']}")
+                    
+                    # 다중 계정 정보 표시
+                    if multi_wp_ready and "selected_account" in wp_result:
+                        account_info = wp_result["selected_account"]
+                        print(f"   👤 업로드 계정: {account_info['nickname']}")
+                        print(f"   🎯 매칭 점수: {account_info['match_score']:.3f}")
+                        print(f"   🏷️ 전문 분야: {', '.join(account_info['expertise_categories'])}")
+                    elif not multi_wp_ready:
+                        print(f"   📝 업로드 방식: 기존 단일 계정")
+                        
                 elif wp_ready:
                     print(f"\n❌ 워드프레스 업로드 실패")
                 else:
@@ -1822,9 +2003,9 @@ async def main():
     upload_to_wp = args.wp and not args.no_wp
 
     if upload_to_wp:
-        print("🚀 워드프레스 자동 업로드 모드")
+        print("[MODE] 워드프레스 자동 업로드 모드")
     else:
-        print("📝 파일 생성만 수행 (워드프레스 업로드 안함)")
+        print("[MODE] 파일 생성만 수행 (워드프레스 업로드 안함)")
 
     pipeline = EnhancedRAGPipeline()
     result = await pipeline.run_complete_pipeline(
@@ -1832,11 +2013,11 @@ async def main():
     )
 
     if result["success"]:
-        print(f"\n✅ 파이프라인 성공! 생성된 파일들을 확인하세요.")
+        print(f"\n[SUCCESS] 파이프라인 성공! 생성된 파일들을 확인하세요.")
         if "wordpress" in result:
-            print(f"🌐 워드프레스 포스트: {result['wordpress']['post_url']}")
+            print(f"[WP] 워드프레스 포스트: {result['wordpress']['post_url']}")
     else:
-        print(f"\n❌ 파이프라인 실패: {result['error']}")
+        print(f"\n[ERROR] 파이프라인 실패: {result['error']}")
 
 
 if __name__ == "__main__":

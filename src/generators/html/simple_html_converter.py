@@ -153,6 +153,24 @@ class SimpleHTMLConverter:
             )
             return anchor_id
 
+        # 제목 변환 - 긴 패턴부터 먼저 처리 (H4 -> H3 -> H2 순서)
+        
+        # H4 변환 (#### 제목) - 공백 선택적으로 매칭
+        content = re.sub(
+            r"^####\s*(.+)$",
+            f'<h4 class="{self.css_classes["subsubsection_title"]}">\\1</h4>',
+            content,
+            flags=re.MULTILINE,
+        )
+
+        # H3 변환 (### 제목) - 공백 선택적으로 매칭
+        content = re.sub(
+            r"^###\s*(.+)$",
+            f'<h3 class="{self.css_classes["subsection_title"]}">\\1</h3>',
+            content,
+            flags=re.MULTILINE,
+        )
+
         # H2 변환 (## 제목) - 앵커 ID 추가
         def replace_h2(match):
             title = match.group(1)
@@ -160,28 +178,21 @@ class SimpleHTMLConverter:
 
             # 특별한 섹션들에 대한 고정 ID
             if "📖 핵심 용어 정리" in title:
-                anchor_id = "terms-section"
+                anchor_id = "핵심-용어-정리"
             elif "📚 목차" in title:
                 anchor_id = "toc-section"
 
             return f'<h2 id="{anchor_id}" class="{self.css_classes["section_title"]}">{title}</h2>'
 
-        content = re.sub(r"^## (.+)$", replace_h2, content, flags=re.MULTILINE)
+        # ## 뒤에 공백이 있거나 없는 경우 모두 매칭 (공백은 선택적)
+        # 단, ###이나 ####는 이미 처리되었으므로 정확히 ##만 매칭
+        content = re.sub(r"^##(?!#)\s*(.+)$", replace_h2, content, flags=re.MULTILINE)
 
-        # H3 변환 (### 제목)
+        # 이미 HTML로 변환된 핵심 용어 정리 섹션의 ID 수정
         content = re.sub(
-            r"^### (.+)$",
-            f'<h3 class="{self.css_classes["subsection_title"]}">\\1</h3>',
-            content,
-            flags=re.MULTILINE,
-        )
-
-        # H4 변환 (#### 제목)
-        content = re.sub(
-            r"^#### (.+)$",
-            f'<h4 class="{self.css_classes["subsubsection_title"]}">\\1</h4>',
-            content,
-            flags=re.MULTILINE,
+            r'<h2 id="terms-section">(📖\s*핵심\s*용어\s*정리)</h2>',
+            r'<h2 id="핵심-용어-정리" class="blog-section-title">\1</h2>',
+            content
         )
 
         return content
@@ -484,7 +495,7 @@ def convert_blog_file_to_html(
     if output_file_path:
         with open(output_file_path, "w", encoding="utf-8") as f:
             f.write(html_content)
-        print(f"✅ HTML 파일 저장 완료: {output_file_path}")
+        print(f"[SUCCESS] HTML 파일 저장 완료: {output_file_path}")
 
     return html_content
 
