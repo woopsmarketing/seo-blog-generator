@@ -1,0 +1,151 @@
+# CSS 클래스 및 ID 참조 문서 (simple_html_converter.py)
+
+## 📋 업데이트된 네이밍 가이드 (fs- prefix)
+
+### 전체 래퍼
+- `.fs-article` - 전체 블로그 포스트 래퍼
+
+### 제목 관련 클래스
+- `.fs-h1` - H1 제목 (메인 타이틀)
+- `.fs-h2` - H2 제목 (섹션 제목)  
+- `.fs-h3` - H3 제목 (소제목)
+- `.fs-h4` - H4 제목 (하위 소제목)
+
+### 목차 관련 클래스
+- `.fs-toc` - 목차 섹션 컨테이너
+- `.fs-toc-list` - 목차 리스트
+
+### 이미지 관련 클래스
+- `.fs-figure` - 이미지 컨테이너 (figcaption 지원)
+
+### 핵심 용어 정리 관련 클래스
+#### 정석 패턴 (권장)
+- `.fs-terms` - 용어 정의 목록 컨테이너 (dl 태그용)
+
+#### 빠른 변환 패턴 (기존 구조 유지)
+- `.fs-terms.fs-terms-legacy` - 기존 구조 유지용 복합 클래스
+- `.fs-term` - 개별 용어 항목
+
+### 콘텐츠 관련 클래스
+- `.fs-paragraph` - 일반 문단
+- `.fs-list` - 목록 컨테이너 (ul/ol)
+- `.fs-list-item` - 목록 항목 (li)
+
+### 표 관련 클래스
+- `.fs-table` - 표 컨테이너
+- `.fs-table-header` - 표 헤더 셀 (th)
+- `.fs-table-cell` - 표 데이터 셀 (td)
+
+### 알림/주의 박스
+- `.fs-note` - 알림/주의 박스
+
+### FAQ 관련 클래스
+- `.fs-faq` - FAQ 섹션 컨테이너
+- `.fs-faq-item` - FAQ 개별 항목 (details > summary + div)
+
+### 특수 섹션 클래스
+- `.fs-intro` - 개요/서론 섹션
+- `.fs-conclusion` - 마무리/결론 섹션
+
+## 🔧 현재 코드에서 사용되는 ID들
+
+### 자동 생성 앵커 ID들
+- `#핵심-용어-정리` - 핵심 용어 정리 섹션 앵커
+- `#toc-section` - 목차 섹션 앵커
+- 기타 제목에서 자동 생성되는 앵커 ID들 (공백을 하이픈으로 변환)
+
+## 📝 코드 매핑 정보
+
+### CSS 클래스 딕셔너리 키와 값 매핑
+```python
+{
+    # 전체 래퍼
+    "article_wrapper": "fs-article",
+    
+    # 섹션 관련
+    "main_title": "fs-h1",
+    "section_title": "fs-h2", 
+    "subsection_title": "fs-h3",
+    "subsubsection_title": "fs-h4",
+    
+    # 목차 관련
+    "toc_section": "fs-toc",
+    "toc_list": "fs-toc-list",
+    
+    # 이미지 관련
+    "figure": "fs-figure",
+    
+    # 핵심 용어 관련
+    "terms_definition": "fs-terms",
+    "term_item": "fs-term",
+    "terms_legacy": "fs-terms fs-terms-legacy",
+    
+    # 콘텐츠 관련
+    "content_paragraph": "fs-paragraph",
+    "content_list": "fs-list",
+    "content_list_item": "fs-list-item",
+    
+    # 표 관련
+    "table": "fs-table",
+    "table_header": "fs-table-header",
+    "table_cell": "fs-table-cell",
+    
+    # 알림/주의 박스
+    "note_box": "fs-note",
+    
+    # FAQ 관련
+    "faq_section": "fs-faq",
+    "faq_item": "fs-faq-item",
+    
+    # 특수 섹션
+    "intro_section": "fs-intro",
+    "conclusion_section": "fs-conclusion"
+}
+```
+
+### 변환 함수별 사용 클래스
+
+#### _convert_headings()
+- `fs-h2` (section_title)
+- `fs-h3` (subsection_title) 
+- `fs-h4` (subsubsection_title)
+
+#### _convert_terms_section()
+- `fs-term` (term_item) - 개별 용어 항목에 적용
+
+#### _convert_tables()
+- `fs-table` (table) - 테이블 컨테이너
+- `fs-table-header` (table_header) - th 태그
+- `fs-table-cell` (table_cell) - td 태그
+
+#### _convert_lists()
+- `fs-list` (content_list) - ul 태그
+- `fs-list-item` (content_list_item) - li 태그
+
+#### _convert_paragraphs()
+- `fs-paragraph` (content_paragraph) - p 태그
+
+#### _apply_special_section_classes()
+- `fs-faq` (faq_section) - FAQ 섹션
+- `fs-intro` (intro_section) - 개요 섹션
+- `fs-conclusion` (conclusion_section) - 마무리 섹션
+
+## 🎯 구현 예정/미완성 기능
+
+다음 클래스들은 정의되어 있지만 아직 코드에서 사용되지 않음:
+- `fs-article` (article_wrapper) - 전체 래퍼
+- `fs-h1` (main_title) - H1 제목
+- `fs-toc` (toc_section) - 목차 섹션  
+- `fs-toc-list` (toc_list) - 목차 리스트
+- `fs-figure` (figure) - 이미지 컨테이너
+- `fs-terms` (terms_definition) - 정석 용어 정의 패턴
+- `fs-note` (note_box) - 알림/주의 박스
+- `fs-faq-item` (faq_item) - FAQ 개별 항목
+
+## 📊 요약
+
+총 정의된 클래스: 20개
+현재 사용 중인 클래스: 12개  
+미구현 클래스: 8개
+
+모든 클래스는 `fs-` prefix를 사용하여 통일성을 확보함.

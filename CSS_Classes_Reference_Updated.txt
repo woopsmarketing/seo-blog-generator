@@ -1,0 +1,176 @@
+# CSS 클래스 및 ID 참조 문서 (개선된 simple_html_converter.py)
+
+## 📋 개선된 HTML 구조 및 클래스 가이드 (fs- prefix)
+
+### 전체 구조
+```html
+<article class="fs-article">
+  <!-- 모든 블로그 콘텐츠가 여기 안에 들어감 -->
+</article>
+```
+
+### 사용 중인 CSS 클래스
+
+#### 전체 래퍼
+- `.fs-article` - 전체 블로그 포스트 래퍼 (article 태그)
+
+#### 제목 관련 클래스
+- `.fs-h1` - H1 제목 (메인 타이틀) - 정의됨, 미사용
+- `.fs-h2` - H2 섹션 제목 (앵커 ID 포함)
+- `.fs-h3` - H3 소제목
+- `.fs-h4` - H4 하위 소제목
+
+#### 목차 관련 클래스 (개선됨)
+- `.fs-toc` - 목차 섹션 컨테이너 (nav 태그)
+- `.fs-toc-list` - 목차 리스트 (ol 태그)
+
+#### 이미지 관련 클래스 (개선됨)
+- `.fs-figure` - 이미지 컨테이너 (figure 태그, figcaption 지원)
+
+#### 핵심 용어 정리 관련 클래스 (개선됨)
+- `.fs-terms` - 용어 정의 목록 컨테이너 (dl 태그)
+- `.fs-term-name` - 용어명 (dt 태그)
+- `.fs-term-description` - 용어 설명 (dd 태그)
+- `.fs-term` - 개별 용어 항목 (legacy support)
+
+#### 콘텐츠 관련 클래스
+- ~~`.fs-paragraph`~~ - **제거됨** (간결성을 위해 클래스 없는 `<p>` 사용)
+- `.fs-list` - 목록 컨테이너 (ul/ol 태그)
+- `.fs-list-item` - 목록 항목 (li 태그)
+
+#### 표 관련 클래스
+- `.fs-table` - 표 컨테이너 (table 태그)
+- `.fs-table-header` - 표 헤더 셀 (th 태그)
+- `.fs-table-cell` - 표 데이터 셀 (td 태그)
+
+#### 알림/주의 박스
+- `.fs-note` - 알림/주의 박스 - 정의됨, 미사용
+
+#### FAQ 관련 클래스
+- `.fs-faq` - FAQ 섹션 컨테이너
+- `.fs-faq-item` - FAQ 개별 항목 - 정의됨, 미사용
+
+#### 특수 섹션 클래스
+- `.fs-intro` - 개요/서론 섹션
+- `.fs-conclusion` - 마무리/결론 섹션
+
+### 자동 생성 앵커 ID들
+- `#핵심-용어-정리` - 핵심 용어 정리 섹션 앵커
+- `#toc-section` - 목차 섹션 앵커
+- 기타 H2 제목에서 자동 생성되는 앵커 ID들 (공백을 하이픈으로 변환)
+
+## 🔄 개선된 HTML 구조 예시
+
+### 전체 구조
+```html
+<article class="fs-article">
+  <!-- 모든 콘텐츠 -->
+</article>
+```
+
+### 목차 구조 (개선됨 - 자동 번호 매김)
+```html
+<nav class="fs-toc">
+  <h2 id="toc-section" class="fs-h2">📚 목차</h2>
+  <ol class="fs-toc-list">
+    <li><a href="#핵심-용어-정리">핵심 용어 정리</a></li>
+    <li><a href="#개요">개요</a></li>
+    <li><a href="#AI-글쓰기-도구의-원리와-선택-가이드">AI 글쓰기 도구의 원리와 선택 가이드</a></li>
+    <!-- ... -->
+  </ol>
+</nav>
+```
+**참고**: `<ol>` 태그의 기본 CSS 번호 매김으로 "1. 핵심 용어 정리", "2. 개요" 형태로 자동 표시
+
+### 이미지 구조 (개선됨)
+```html
+<figure class="fs-figure">
+  <img src="이미지URL" alt="alt텍스트" loading="lazy">
+</figure>
+```
+
+### 용어 정리 구조 (개선됨 - 시맨틱 리스트)
+```html
+<h2 id="핵심-용어-정리" class="fs-h2">📖 핵심 용어 정리</h2>
+<p>본문을 읽기 전에 알아두면 좋은 용어들입니다.</p>
+<dl class="fs-terms">
+  <dt class="fs-term-name">대형 언어 모델</dt>
+  <dd class="fs-term-description">다양한 텍스트로 학습한 AI 모델</dd>
+  <dt class="fs-term-name">프롬프트 설계</dt>
+  <dd class="fs-term-description">주제와 톤, 길이를 결정하는 입력 설계</dd>
+  <!-- ... -->
+</dl>
+```
+**참고**: `<dl><dt><dd>` 구조는 용어 정의에 가장 적합한 시맨틱 HTML 구조
+
+### 단락 구조 (간소화됨)
+```html
+<p>클래스 없는 간결한 단락</p>
+<p>또 다른 단락</p>
+```
+
+## 📊 코드 변경 사항 요약
+
+### ✅ 개선된 기능들
+1. **전체 article 래퍼 추가** - 모든 콘텐츠를 `<article class="fs-article">`로 감쌈
+2. **이미지 구조 개선** - `<p><img></p>` → `<figure class="fs-figure"><img></figure>`
+3. **목차 구조 개선** - `<p>1. 링크<br>2. 링크</p>` → `<nav><ol><li>링크</li></ol></nav>` (자동 번호 매김)
+4. **용어 정리 구조화** - 개별 `<p>` → `<dl class="fs-terms"><dt><dd>...</dt></dd></dl>` (시맨틱 용어 정의)
+5. **단락 클래스 제거** - `<p class="fs-paragraph">` → `<p>` (간결성 향상)
+
+### 📈 변환 함수별 사용 클래스
+
+#### _wrap_with_article() (신규)
+- `fs-article` - 전체 래퍼
+
+#### _convert_toc_structure() (신규)
+- `fs-toc` - nav 태그
+- `fs-toc-list` - ol 태그
+
+#### _convert_headings()
+- `fs-h2` - H2 섹션 제목
+- `fs-h3` - H3 소제목
+- `fs-h4` - H4 하위 소제목
+
+#### _convert_terms_section() (개선됨)
+- `fs-terms` - 용어 컨테이너 (dl 태그)
+- `fs-term-name` - 용어명 (dt 태그)
+- `fs-term-description` - 용어 설명 (dd 태그)
+
+#### _convert_images() (개선됨)
+- `fs-figure` - figure 태그
+
+#### _convert_tables()
+- `fs-table` - table 태그
+- `fs-table-header` - th 태그
+- `fs-table-cell` - td 태그
+
+#### _convert_lists()
+- `fs-list` - ul 태그
+- `fs-list-item` - li 태그
+
+#### _convert_paragraphs() (간소화됨)
+- ~~fs-paragraph~~ - 제거됨 (클래스 없는 `<p>` 사용)
+
+#### _apply_special_section_classes()
+- `fs-faq` - FAQ 섹션
+- `fs-intro` - 개요 섹션
+- `fs-conclusion` - 마무리 섹션
+
+## 🎯 총 클래스 현황
+
+**정의된 클래스**: 22개 (fs-term-name, fs-term-description 추가)
+**실제 사용 클래스**: 18개
+**제거된 클래스**: 1개 (fs-paragraph)
+**미구현 클래스**: 3개 (fs-h1, fs-note, fs-faq-item)
+
+## 🔍 SEO 및 접근성 개선사항
+
+1. **시맨틱 마크업**: `<article>`, `<nav>`, `<figure>`, `<dl><dt><dd>` 태그 사용
+2. **구조화된 목차**: `<nav><ol>` 구조로 스크린 리더 친화적 (자동 번호 매김)
+3. **용어 정의 최적화**: `<dl><dt><dd>` 구조로 의미론적 용어 정의
+4. **이미지 최적화**: `loading="lazy"` 속성으로 성능 향상
+5. **앵커 링크**: 모든 H2 제목에 자동 앵커 ID 생성
+6. **간결한 HTML**: 불필요한 클래스 제거로 가독성 향상
+
+모든 클래스는 `fs-` prefix를 사용하여 네임스페이스 충돌을 방지합니다.

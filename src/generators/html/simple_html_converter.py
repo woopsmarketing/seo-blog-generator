@@ -26,25 +26,40 @@ class SimpleHTMLConverter:
         self.css_classes = self._init_wordpress_classes()
 
     def _init_wordpress_classes(self) -> Dict[str, str]:
-        """워드프레스 호환 CSS 클래스 정의"""
+        """워드프레스 호환 CSS 클래스 정의 (fs- prefix)"""
         return {
+            # 전체 래퍼
+            "article_wrapper": "fs-article",  # 전체 래퍼
             # 섹션 관련
-            "main_title": "blog-main-title",  # H1 제목
-            "section_title": "blog-section-title",  # H2 제목
-            "subsection_title": "blog-subsection",  # H3 제목
-            "subsubsection_title": "blog-subsubsection",  # H4 제목
-            # 콘텐츠 관련
-            "content_paragraph": "blog-content",  # 일반 문단
-            "content_list": "blog-list",  # 목록 컨테이너
-            "content_list_item": "blog-list-item",  # 목록 항목
+            "main_title": "fs-h1",  # H1 제목
+            "section_title": "fs-h2",  # H2 제목
+            "subsection_title": "fs-h3",  # H3 제목
+            "subsubsection_title": "fs-h4",  # H4 제목
+            # 목차 관련
+            "toc_section": "fs-toc",  # 목차 섹션 (nav 태그)
+            "toc_list": "fs-toc-list",  # 목차 리스트 (ol 태그)
+            # 이미지 관련
+            "figure": "fs-figure",  # 이미지 컨테이너 (figure 태그)
+            # 핵심 용어 관련
+            "terms_definition": "fs-terms",  # 용어 정의 목록 컨테이너 (dl 태그)
+            "term_name": "fs-term-name",  # 용어명 (dt 태그)
+            "term_description": "fs-term-description",  # 용어 설명 (dd 태그)
+            "term_item": "fs-term",  # 개별 용어 항목 (legacy support)
+            # 콘텐츠 관련 (fs-paragraph 제거)
+            "content_list": "fs-list",  # 목록 컨테이너
+            "content_list_item": "fs-list-item",  # 목록 항목
             # 표 관련
-            "table": "blog-table",  # 표 컨테이너
-            "table_header": "blog-table-header",  # 표 헤더
-            "table_cell": "blog-table-cell",  # 표 셀
+            "table": "fs-table",  # 표 컨테이너
+            "table_header": "fs-table-header",  # 표 헤더
+            "table_cell": "fs-table-cell",  # 표 셀
+            # 알림/주의 박스
+            "note_box": "fs-note",  # 알림/주의 박스
+            # FAQ 관련
+            "faq_section": "fs-faq",  # FAQ 섹션
+            "faq_item": "fs-faq-item",  # FAQ 개별 항목
             # 특수 섹션
-            "faq_section": "blog-faq",  # FAQ 섹션
-            "intro_section": "blog-intro",  # 개요 섹션
-            "conclusion_section": "blog-conclusion",  # 마무리 섹션
+            "intro_section": "fs-intro",  # 개요 섹션
+            "conclusion_section": "fs-conclusion",  # 마무리 섹션
         }
 
     def convert_markdown_to_html(self, markdown_content: str) -> str:
@@ -66,32 +81,38 @@ class SimpleHTMLConverter:
         # 3. 제목 변환 (H1, H2, H3, H4)
         html = self._convert_headings(html)
 
-        # 4. 용어 정리 섹션 변환 (볼드 변환보다 먼저)
-        html = self._convert_terms_section(html)
-
-        # 5. 텍스트 스타일 변환 (볼드, 이탤릭)
+        # 4. 텍스트 스타일 변환 (볼드, 이탤릭)
         html = self._convert_text_styles(html)
+
+        # 5. 용어 정리 섹션 변환 (볼드 변환 후)
+        html = self._convert_terms_section(html)
 
         # 6. 이미지 변환 (링크보다 먼저 처리해야 함)
         html = self._convert_images(html)
 
-        # 7. 마크다운 링크 변환 (이미지 처리 후)
-        html = self._convert_links(html)
-
-        # 8. 표 변환
+        # 7. 표 변환
         html = self._convert_tables(html)
 
-        # 9. 목록 변환
+        # 8. 목록 변환
         html = self._convert_lists(html)
 
-        # 10. 문단 변환
+        # 9. 문단 변환
         html = self._convert_paragraphs(html)
+
+        # 10. 마크다운 링크 변환 (제목 변환 후에 실행하여 앵커 ID 오염 방지)
+        html = self._convert_links(html)
 
         # 11. 특수 섹션 클래스 적용
         html = self._apply_special_section_classes(html)
 
-        # 12. 정리 작업
+        # 12. 목차(TOC) 구조 개선
+        html = self._convert_toc_structure(html)
+
+        # 13. 정리 작업
         html = self._cleanup_html(html)
+
+        # 14. 전체 article 래퍼로 감싸기
+        html = self._wrap_with_article(html)
 
         return html.strip()
 
@@ -141,10 +162,16 @@ class SimpleHTMLConverter:
         """마크다운 제목을 HTML 제목으로 변환 (앵커 ID 포함)"""
 
         def generate_anchor_id(title: str) -> str:
-            """제목에서 앵커 ID 생성"""
-            # 특수문자 제거하고 공백을 하이픈으로 변환
+            """제목에서 앵커 ID 생성 (마크다운 링크 및 HTML 태그 제거 후 처리)"""
+            # 1. 먼저 마크다운 링크 패턴 제거 [텍스트](링크) -> 텍스트
+            clean_title = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", title)
+
+            # 2. HTML 태그 제거 (링크 태그 등)
+            clean_title = re.sub(r"<[^>]+>", "", clean_title)
+
+            # 3. 특수문자 제거하고 공백을 하이픈으로 변환
             anchor_id = (
-                title.replace(" ", "-")
+                clean_title.replace(" ", "-")
                 .replace(":", "")
                 .replace("?", "")
                 .replace("!", "")
@@ -154,7 +181,7 @@ class SimpleHTMLConverter:
             return anchor_id
 
         # 제목 변환 - 긴 패턴부터 먼저 처리 (H4 -> H3 -> H2 순서)
-        
+
         # H4 변환 (#### 제목) - 공백 선택적으로 매칭
         content = re.sub(
             r"^####\s*(.+)$",
@@ -191,34 +218,73 @@ class SimpleHTMLConverter:
         # 이미 HTML로 변환된 핵심 용어 정리 섹션의 ID 수정
         content = re.sub(
             r'<h2 id="terms-section">(📖\s*핵심\s*용어\s*정리)</h2>',
-            r'<h2 id="핵심-용어-정리" class="blog-section-title">\1</h2>',
-            content
+            r'<h2 id="핵심-용어-정리" class="'
+            + self.css_classes["section_title"]
+            + r'">\1</h2>',
+            content,
         )
 
         return content
 
     def _convert_terms_section(self, content: str) -> str:
-        """핵심 용어 정리 섹션의 **용어**: 설명 형태를 HTML로 변환 (마크다운 상태에서)"""
-        # 핵심 용어 정리 섹션 찾기 (마크다운 헤더 상태)
-        terms_section_pattern = r"(## 📖 핵심 용어 정리.*?)(?=\n## |\n# |$)"
+        """핵심 용어 정리 섹션의 **용어**: 설명 형태를 구조화된 HTML로 변환"""
+        # 핵심 용어 정리 섹션 찾기 (HTML 변환 후 상태)
+        terms_section_pattern = (
+            r"(<h2[^>]*>📖 핵심 용어 정리</h2>.*?)(?=<h[12][^>]*>|$)"
+        )
 
         def convert_terms_content(match):
-            """용어 정리 섹션 내용 변환"""
+            """용어 정리 섹션 내용을 구조화된 HTML로 변환"""
             section_content = match.group(1)
 
-            # **용어**: 설명 패턴을 HTML로 변환
-            # 패턴: **용어명**: 설명내용
-            term_pattern = r"\*\*([^*:]+)\*\*:\s*([^\n]+)"
+            # 제목 부분과 내용 부분 분리
+            lines = section_content.split("\n")
+            header_line = lines[0]  # <h2>...</h2>
 
-            def replace_term(term_match):
-                term_name = term_match.group(1).strip()
-                term_explanation = term_match.group(2).strip()
-                return f'<div class="term-item"><strong>{term_name}</strong>: {term_explanation}</div>'
+            # **용어**: 설명 패턴을 찾아서 변환 (볼드 변환 후에는 <strong> 태그로 변경됨)
+            term_pattern = r"<strong>([^<]+)</strong>:\s*([^\n]+)"
+            terms_html = []
+            intro_text = ""
 
-            # 용어들을 HTML로 변환
-            section_content = re.sub(term_pattern, replace_term, section_content)
+            # 설명 문구와 용어들을 찾기
+            for line in lines[1:]:
+                line = line.strip()
+                if not line:  # 빈 줄 건너뛰기
+                    continue
 
-            return section_content
+                term_match = re.match(term_pattern, line)
+                if term_match:
+                    term_name = term_match.group(1).strip()
+                    term_explanation = term_match.group(2).strip()
+                    # dl > dt, dd 구조로 용어 정의 생성 (시맨틱한 용어 정의)
+                    terms_html.append(
+                        f'  <dt class="{self.css_classes["term_name"]}">{term_name}</dt>'
+                    )
+                    terms_html.append(
+                        f'  <dd class="{self.css_classes["term_description"]}">{term_explanation}</dd>'
+                    )
+                elif (
+                    not intro_text and not term_match
+                ):  # 첫 번째 비-용어 줄을 설명으로 사용
+                    intro_text = line
+
+            # 구조화된 HTML 생성 (dl 태그 사용)
+            if terms_html:
+                terms_container = (
+                    f'<dl class="{self.css_classes["terms_definition"]}">'
+                    + "\n"
+                    + "\n".join(terms_html)
+                    + "\n</dl>"
+                )
+
+                if not intro_text:
+                    intro_text = "본문을 읽기 전에 알아두면 좋은 용어들입니다."
+
+                return (
+                    header_line + "\n\n<p>" + intro_text + "</p>\n\n" + terms_container
+                )
+            else:
+                return section_content
 
         # 핵심 용어 정리 섹션 변환
         content = re.sub(
@@ -239,23 +305,27 @@ class SimpleHTMLConverter:
         return content
 
     def _convert_images(self, content: str) -> str:
-        """마크다운 이미지를 HTML <img> 태그로 변환
+        """마크다운 이미지를 시맨틱 HTML figure 구조로 변환
 
         마크다운 형식: ![alt텍스트](이미지URL)
-        HTML 형식: <img src="이미지URL" alt="alt텍스트" loading="lazy">
+        HTML 형식: <figure class="fs-figure"><img src="이미지URL" alt="alt텍스트" loading="lazy"></figure>
         """
         # 마크다운 이미지 패턴: ![alt텍스트](이미지URL)
         image_pattern = r"!\[([^\]]*)\]\(([^)]+)\)"
 
         def replace_image(match):
-            """이미지 변환 함수"""
+            """이미지를 figure 구조로 변환하는 함수"""
             alt_text = match.group(1)  # alt 텍스트
             image_url = match.group(2)  # 이미지 URL
 
-            # HTML img 태그로 변환
-            return f'<img src="{image_url}" alt="{alt_text}" loading="lazy">'
+            # figure 태그로 감싸진 img 태그 생성
+            return (
+                f'<figure class="{self.css_classes["figure"]}">'
+                + f'<img src="{image_url}" alt="{alt_text}" loading="lazy">'
+                + f"</figure>"
+            )
 
-        # 모든 마크다운 이미지를 HTML img 태그로 변환
+        # 모든 마크다운 이미지를 figure 구조로 변환
         content = re.sub(image_pattern, replace_image, content)
 
         return content
@@ -402,7 +472,7 @@ class SimpleHTMLConverter:
         return "\n".join(result_lines)
 
     def _convert_paragraphs(self, content: str) -> str:
-        """빈 줄로 구분된 문단을 HTML <p> 태그로 변환"""
+        """빈 줄로 구분된 문단을 간결한 HTML <p> 태그로 변환 (클래스 제거)"""
         # 연속된 빈 줄을 하나로 정리
         content = re.sub(r"\n\s*\n", "\n\n", content)
 
@@ -416,17 +486,15 @@ class SimpleHTMLConverter:
             if not paragraph:
                 continue
 
-            # 이미 HTML 태그로 감싸진 경우 (h2, h3, ul 등) 건너뛰기
+            # 이미 HTML 태그로 감싸진 경우 (h2, h3, ul, figure 등) 건너뛰기
             if paragraph.startswith("<") and paragraph.endswith(">"):
                 html_paragraphs.append(paragraph)
             elif "<" in paragraph and ">" in paragraph:
                 # HTML 태그가 포함된 복합 콘텐츠
                 html_paragraphs.append(paragraph)
             else:
-                # 일반 텍스트 문단 -> <p> 태그로 감싸기
-                html_paragraphs.append(
-                    f'<p class="{self.css_classes["content_paragraph"]}">{paragraph}</p>'
-                )
+                # 일반 텍스트 문단 -> 간결한 <p> 태그로 감싸기 (클래스 없음)
+                html_paragraphs.append(f"<p>{paragraph}</p>")
 
         return "\n\n".join(html_paragraphs)
 
@@ -434,26 +502,95 @@ class SimpleHTMLConverter:
         """특정 섹션에 특별한 클래스 적용"""
         # FAQ 섹션
         content = re.sub(
-            r'(<h2 class="[^"]*">FAQ</h2>)',
-            f'<h2 class="{self.css_classes["faq_section"]} {self.css_classes["section_title"]}">FAQ</h2>',
+            r'(<h2[^>]*class="[^"]*">.*?FAQ.*?</h2>)',
+            f'<div class="{self.css_classes["faq_section"]}">\\1</div>',
             content,
+            flags=re.IGNORECASE,
         )
 
         # 개요 섹션
         content = re.sub(
-            r'(<h2 class="[^"]*">개요</h2>)',
-            f'<h2 class="{self.css_classes["intro_section"]} {self.css_classes["section_title"]}">개요</h2>',
+            r'(<h2[^>]*class="[^"]*">.*?개요.*?</h2>)',
+            f'<div class="{self.css_classes["intro_section"]}">\\1</div>',
             content,
+            flags=re.IGNORECASE,
         )
 
         # 마무리 섹션
         content = re.sub(
-            r'(<h2 class="[^"]*">마무리</h2>)',
-            f'<h2 class="{self.css_classes["conclusion_section"]} {self.css_classes["section_title"]}">마무리</h2>',
+            r'(<h2[^>]*class="[^"]*">.*?마무리.*?</h2>)',
+            f'<div class="{self.css_classes["conclusion_section"]}">\\1</div>',
             content,
+            flags=re.IGNORECASE,
         )
 
         return content
+
+    def _convert_toc_structure(self, content: str) -> str:
+        """목차 구조를 시맨틱 nav > ol 구조로 변환"""
+        # 목차 섹션 패턴: H2 제목 + 바로 다음 p 태그 (간단한 매칭)
+        toc_pattern = r"(<h2[^>]*>.*?📚.*?목차.*?</h2>)\s*\n\s*(<p>.*?</p>)"
+
+        def convert_toc_content(match):
+            """목차 내용을 nav > ol 구조로 변환 (목차만 감싸기)"""
+            header = match.group(1)  # h2 제목
+            toc_paragraph = match.group(2)  # <p>내용</p>
+
+            # p 태그 제거하고 내용만 추출
+            toc_content = re.sub(r"</?p>", "", toc_paragraph)
+
+            # 줄바꿈 또는 <br> 태그로 분리된 목차 항목들을 추출
+            toc_items = re.split(r"\n|<br\s*/?>", toc_content)
+
+            # ol 태그로 목차 리스트 생성 (숫자 자동 표시)
+            toc_list_items = []
+            item_number = 1
+            for item in toc_items:
+                item = item.strip()
+                if item and not item.isspace():
+                    # 기존 숫자. 제거 (예: "1. " 제거)
+                    item = re.sub(r"^\d+\.\s*", "", item)
+                    if item:  # 비어있지 않은 항목만 추가
+                        # ol 태그의 자동 번호 매김 사용 (CSS로 제어 가능)
+                        toc_list_items.append(f"    <li>{item}</li>")
+                        item_number += 1
+
+            if toc_list_items:
+                # nav 태그로 목차만 감싸기
+                toc_html = (
+                    f'<nav class="{self.css_classes["toc_section"]}">'
+                    + "\n"
+                    + header
+                    + "\n"
+                    + f'  <ol class="{self.css_classes["toc_list"]}">'
+                    + "\n"
+                    + "\n".join(toc_list_items)
+                    + "\n"
+                    + "  </ol>"
+                    + "\n"
+                    + "</nav>"
+                )
+                return toc_html
+            else:
+                # 목차 항목이 없으면 원래대로 반환
+                return header + "\n" + toc_paragraph
+
+        # 목차 구조 변환 적용
+        content = re.sub(
+            toc_pattern, convert_toc_content, content, flags=re.MULTILINE | re.DOTALL
+        )
+
+        return content
+
+    def _wrap_with_article(self, content: str) -> str:
+        """전체 콘텐츠를 article 태그로 감싸기"""
+        return (
+            f'<article class="{self.css_classes["article_wrapper"]}">'
+            + "\n"
+            + content
+            + "\n"
+            + "</article>"
+        )
 
     def _cleanup_html(self, content: str) -> str:
         """HTML 정리 작업"""
